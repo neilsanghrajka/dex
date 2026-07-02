@@ -4,38 +4,66 @@ struct NewWindowLaunchSettingsView: View {
     @EnvironmentObject private var model: AppModel
 
     @State private var isPickerPresented = false
+    @State private var isExpanded = false
 
     var body: some View {
-        Form {
-            Section("Open New Windows") {
-                if model.newWindowLaunchRules.isEmpty {
-                    Text("No apps selected.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(model.newWindowLaunchRules) { rule in
-                        row(for: rule)
+        VStack(alignment: .leading, spacing: 10) {
+            DisclosureGroup(isExpanded: $isExpanded) {
+                VStack(alignment: .leading, spacing: 10) {
+                    if model.newWindowLaunchRules.isEmpty {
+                        Text("No apps selected.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 8)
+                    } else {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(model.newWindowLaunchRules) { rule in
+                                row(for: rule)
+                                if rule.id != model.newWindowLaunchRules.last?.id {
+                                    Divider()
+                                        .opacity(0.35)
+                                        .padding(.leading, 34)
+                                }
+                            }
+                        }
+                        .padding(.top, 6)
                     }
-                }
 
-                HStack {
-                    Button {
-                        isPickerPresented = true
-                    } label: {
-                        Label("Add App...", systemImage: "plus")
+                    HStack {
+                        Button {
+                            isPickerPresented = true
+                        } label: {
+                            Label("Add App…", systemImage: "plus")
+                        }
+                        Spacer()
+                        Button("Restore Defaults") {
+                            model.resetNewWindowLaunchRulesToDefaults()
+                        }
+                        .buttonStyle(.link)
                     }
+
+                    Text("Dex tries to create a fresh app window when the app supports it, then falls back to normal launch or activation.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Label("Open New Windows", systemImage: "macwindow.badge.plus")
+                        .font(.headline.weight(.semibold))
                     Spacer()
-                    Button("Restore Defaults") {
-                        model.resetNewWindowLaunchRulesToDefaults()
-                    }
-                    .buttonStyle(.link)
+                    Text("\(model.newWindowLaunchRules.count)")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.secondary.opacity(0.10), in: Capsule())
                 }
             }
-
-            Text("Dex tries to create a fresh app window when the app supports it, then falls back to normal launch or activation.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
-        .padding(20)
+        .frame(maxWidth: 460, alignment: .leading)
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .sheet(isPresented: $isPickerPresented) {
             NewWindowLaunchRulePicker { application in
                 isPickerPresented = false
@@ -66,7 +94,7 @@ struct NewWindowLaunchSettingsView: View {
             .buttonStyle(.borderless)
             .help("Remove \(rule.displayName)")
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 7)
     }
 
     @ViewBuilder

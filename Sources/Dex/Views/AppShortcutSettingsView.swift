@@ -1,9 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// Settings → Shortcuts editor: a table of app-launch bindings with a press-to-record
-/// key badge, remove buttons, and an "Add App…" picker. Reads/writes the live binding
-/// list on `AppModel`.
+/// App-launch shortcut editor card: a table of bindings with a press-to-record key
+/// badge, remove buttons, and an "Add App…" picker. Reads/writes the live binding
+/// list on `AppModel`. Lives on the main Dex window.
 struct AppShortcutSettingsView: View {
     @EnvironmentObject private var model: AppModel
 
@@ -12,33 +12,54 @@ struct AppShortcutSettingsView: View {
     @State private var isPickerPresented = false
 
     var body: some View {
-        Form {
-            Section("App Launch Shortcuts") {
-                ForEach(model.appShortcutBindings) { binding in
-                    row(for: binding)
-                }
-
-                HStack {
-                    Button {
-                        isPickerPresented = true
-                    } label: {
-                        Label("Add App…", systemImage: "plus")
-                    }
-                    Spacer()
-                    Button("Restore Defaults") {
-                        recordingID = nil
-                        feedback = [:]
-                        model.resetAppShortcutBindingsToDefaults()
-                    }
-                    .buttonStyle(.link)
-                }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Label("Shortcuts", systemImage: "keyboard")
+                    .font(.headline.weight(.semibold))
+                Spacer()
+                Text("\(model.appShortcutBindings.count)")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.secondary.opacity(0.10), in: Capsule())
             }
 
-            Text("Press it while the Arrange Board is open to open the app in the focused column. Use one letter or number per app. Reserved: Q closes/quits, / opens the palette. Arrows, Tab, Return, Esc and Option combos are fixed.")
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(model.appShortcutBindings) { binding in
+                    row(for: binding)
+                    if binding.id != model.appShortcutBindings.last?.id {
+                        Divider()
+                            .opacity(0.35)
+                            .padding(.leading, 34)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack {
+                Button {
+                    isPickerPresented = true
+                } label: {
+                    Label("Add App…", systemImage: "plus")
+                }
+                Spacer()
+                Button("Restore Defaults") {
+                    recordingID = nil
+                    feedback = [:]
+                    model.resetAppShortcutBindingsToDefaults()
+                }
+                .buttonStyle(.link)
+            }
+
+            Text("Press a key while the Arrange Board is open to launch that app in the focused column. One letter or number per app. Reserved: Q closes/quits, / opens the palette.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(20)
+        .frame(maxWidth: 460, alignment: .leading)
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .sheet(isPresented: $isPickerPresented) {
             AppShortcutPicker { application in
                 isPickerPresented = false
@@ -79,7 +100,7 @@ struct AppShortcutSettingsView: View {
                 feedbackView(feedback, for: binding)
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 7)
     }
 
     @ViewBuilder

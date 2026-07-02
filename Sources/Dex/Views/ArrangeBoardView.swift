@@ -3335,7 +3335,7 @@ private struct TourCoachCard: View {
                         ShortcutHelpRow(keys: shortcut.1, label: shortcut.0)
                     }
                 }
-                Text("Make these your own — any app, any key — in Settings (⌘,).")
+                Text("Make these your own — any app, any key — in the Dex window.")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.6))
                     .fixedSize(horizontal: false, vertical: true)

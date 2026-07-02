@@ -2,8 +2,47 @@ import SwiftUI
 
 struct PermissionPanel: View {
     @EnvironmentObject private var model: AppModel
+    @State private var showsDetails = false
+
+    private var allGranted: Bool {
+        model.permissions.isAccessibilityTrusted
+            && model.permissions.isInputMonitoringTrusted
+            && model.permissions.isScreenRecordingTrusted
+    }
 
     var body: some View {
+        VStack(spacing: 10) {
+            if allGranted && !showsDetails {
+                compactRow
+            } else {
+                fullRows
+            }
+        }
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .animation(.easeInOut(duration: 0.15), value: allGranted)
+        .animation(.easeInOut(duration: 0.15), value: showsDetails)
+    }
+
+    private var compactRow: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .font(.title3)
+
+            Text("All permissions granted")
+                .font(.headline)
+
+            Spacer()
+
+            Button("Details") {
+                showsDetails = true
+            }
+            .buttonStyle(.borderless)
+        }
+    }
+
+    private var fullRows: some View {
         VStack(spacing: 10) {
             PermissionRow(
                 title: "Accessibility",
@@ -24,17 +63,24 @@ struct PermissionPanel: View {
                 action: model.requestScreenRecording
             )
 
-            Button {
-                model.refreshPermissions()
-            } label: {
-                Label("Recheck Permissions", systemImage: "arrow.clockwise")
+            HStack(spacing: 16) {
+                Button {
+                    model.refreshPermissions()
+                } label: {
+                    Label("Recheck Permissions", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+
+                if allGranted {
+                    Button("Hide Details") {
+                        showsDetails = false
+                    }
+                    .buttonStyle(.borderless)
+                }
             }
-            .buttonStyle(.borderless)
             .padding(.top, 2)
         }
         .id(model.permissionRefreshID)
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 

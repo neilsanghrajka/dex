@@ -1042,7 +1042,7 @@ final class AppModel: ObservableObject {
         showMainWindow()
     }
 
-    /// Jump straight into the in-board guided tour (menu bar "Replay Tour").
+    /// Jump straight into the in-board guided tour ("Replay Board Tour" in the Dex window).
     func replayTour() async {
         isOnboardingWizardActive = false
         tourStep = .navigate
@@ -1097,7 +1097,7 @@ final class AppModel: ObservableObject {
         guard tourStep != nil else { return }
         tourStep = nil
         finishOnboarding()
-        showHUD("Replay the tour anytime from the menu bar")
+        showHUD("Replay the tour anytime from the Dex window")
     }
 
     func dismissBoardLegend() {

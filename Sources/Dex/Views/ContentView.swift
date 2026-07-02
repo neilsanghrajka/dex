@@ -27,12 +27,21 @@ struct ContentView: View {
                 PermissionPanel()
                     .frame(maxWidth: 460)
 
+                DexActionsPanel()
+                    .environmentObject(model)
+
                 if !model.savedModes.isEmpty {
                     ModeManagementPanel()
                         .environmentObject(model)
                 }
 
-                DexActionsPanel()
+                AppShortcutSettingsView()
+                    .environmentObject(model)
+
+                NewWindowLaunchSettingsView()
+                    .environmentObject(model)
+
+                PreferencesPanel()
                     .environmentObject(model)
             }
             .padding(28)
@@ -54,30 +63,94 @@ struct ContentView: View {
 
 private struct AppHeader: View {
     var body: some View {
-        HStack(spacing: 14) {
-            if let logo = BrandAssets.logoImage() {
-                Image(nsImage: logo)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 58, height: 58)
-                    .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-            } else {
-                Image(systemName: "rectangle.split.3x1")
-                    .font(.system(size: 32, weight: .semibold))
-                    .frame(width: 58, height: 58)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 14) {
+                if let logo = BrandAssets.logoImage() {
+                    Image(nsImage: logo)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 58, height: 58)
+                        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                } else {
+                    Image(systemName: "rectangle.split.3x1")
+                        .font(.system(size: 32, weight: .semibold))
+                        .frame(width: 58, height: 58)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Dex")
+                        .font(.largeTitle.weight(.semibold))
+                    Text("Arrange your current desktop into passive left, main center, and passive right.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Dex")
-                    .font(.largeTitle.weight(.semibold))
-                Text("Arrange your current desktop into passive left, main center, and passive right.")
-                    .font(.callout)
+            HStack(spacing: 8) {
+                KeyCap("⌥")
+                KeyCap("⌥")
+                Text("Double-press Option anywhere to open the board.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
+            .padding(.leading, 2)
         }
         .frame(maxWidth: 460, alignment: .leading)
         .padding(.bottom, 4)
+    }
+}
+
+private struct KeyCap: View {
+    let symbol: String
+
+    init(_ symbol: String) {
+        self.symbol = symbol
+    }
+
+    var body: some View {
+        Text(symbol)
+            .font(.system(.caption, design: .monospaced).weight(.bold))
+            .frame(width: 22, height: 20)
+            .background(.secondary.opacity(0.14), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .strokeBorder(.secondary.opacity(0.25), lineWidth: 1)
+            }
+    }
+}
+
+private struct PreferencesPanel: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Preferences", systemImage: "gearshape")
+                .font(.headline.weight(.semibold))
+
+            Toggle("Show shortcut legend on the board", isOn: $model.showsBoardLegend)
+                .toggleStyle(.switch)
+
+            Divider()
+                .opacity(0.35)
+
+            HStack(spacing: 10) {
+                Button("Replay Onboarding") {
+                    model.replayOnboarding()
+                }
+                Button("Replay Board Tour") {
+                    Task { await model.replayTour() }
+                }
+            }
+
+            Text("Onboarding runs the full welcome flow — granted permissions stay granted. The board tour jumps straight into the guided walkthrough.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: 460, alignment: .leading)
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 

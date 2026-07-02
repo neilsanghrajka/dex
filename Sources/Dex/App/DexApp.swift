@@ -10,17 +10,13 @@ struct DexApp: App {
         WindowGroup("Dex", id: "main") {
             ContentView()
                 .environmentObject(model)
-                .frame(width: 560, height: model.savedModes.isEmpty ? 640 : 760)
+                .frame(width: 560)
+                .frame(minHeight: 620, idealHeight: 780, maxHeight: .infinity)
                 .onAppear {
                     appDelegate.configure(model: model)
                 }
         }
-        .windowResizability(.contentSize)
-
-        Settings {
-            SettingsView()
-                .environmentObject(model)
-        }
+        .windowResizability(.contentMinSize)
 
         MenuBarExtra {
             MenuBarView()

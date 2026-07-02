@@ -3,6 +3,7 @@ import SwiftUI
 
 struct MenuBarView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Button("Arrange Board") {
@@ -11,10 +12,6 @@ struct MenuBarView: View {
 
         Button("Arrange Now") {
             Task { await model.arrangeNow() }
-        }
-
-        Button("Replay Tour") {
-            Task { await model.replayTour() }
         }
 
         Divider()
@@ -28,6 +25,7 @@ struct MenuBarView: View {
         Divider()
 
         Button("Open Dex") {
+            openWindow(id: "main")
             NSApp.activate(ignoringOtherApps: true)
         }
 
