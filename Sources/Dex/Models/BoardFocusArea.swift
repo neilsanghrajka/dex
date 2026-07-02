@@ -6,6 +6,7 @@ enum BoardFocusArea: CaseIterable {
     case right
     case openWindows
     case runningApps
+    case activeModes
 
     init(role: ColumnRole) {
         switch role {
@@ -20,7 +21,7 @@ enum BoardFocusArea: CaseIterable {
         case .left: .left
         case .center: .center
         case .right: .right
-        case .openWindows, .runningApps: nil
+        case .openWindows, .runningApps, .activeModes: nil
         }
     }
 }

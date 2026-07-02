@@ -19,6 +19,9 @@ final class AppModel: ObservableObject {
     @Published var hoveredSnapRole: ColumnRole?
     @Published var hudText: String?
     @Published var permissionRefreshID = UUID()
+    @Published private(set) var savedModes: [SavedMode]
+    @Published private(set) var activeModeInstances: [ActiveModeInstance] = []
+    @Published var modeLaunchConfirmation: ModeLaunchConfirmation = .idle
     @Published private(set) var diaTabsByWindowID: [String: [DiaTab]] = [:]
     @Published private(set) var diaTabPreviewCache: [String: NSImage] = [:]
     @Published private(set) var isArrangeBoardVisible = false
@@ -47,6 +50,7 @@ final class AppModel: ObservableObject {
         self.stacksByDisplay = store.loadStacks()
         self.stacksByWorkspace = store.loadWorkspaceStacks()
         self.boardShortcutMappings = store.loadShortcutMappings()
+        self.savedModes = store.loadSavedModes()
     }
 
     func start() {
@@ -57,7 +61,16 @@ final class AppModel: ObservableObject {
         eventMonitor.onCycle = { [weak self] direction, trigger in
             Task { @MainActor in await self?.cycleStack(direction, trigger: trigger) }
         }
+        eventMonitor.onModeHotkey = { [weak self] slot in
+            guard let self else { return false }
+            Task { @MainActor in await self.handleModeHotkey(slot: slot) }
+            return true
+        }
         eventMonitor.shouldHandleCycle = { [weak self] in
+            guard let self else { return true }
+            return !self.isArrangeBoardVisible
+        }
+        eventMonitor.shouldHandleModeHotkeys = { [weak self] in
             guard let self else { return true }
             return !self.isArrangeBoardVisible
         }
@@ -136,11 +149,11 @@ final class AppModel: ObservableObject {
             return
         }
         let displays = boardDisplays()
-        await refreshWindows(includeThumbnails: false)
+        await refreshWindowsUntilStableForLayoutRead()
         let repairedDisplayIDs = repairStacksFromWindowPositionsIfNeeded(for: displays)
         if !repairedDisplayIDs.isEmpty {
             arrangeAssignedWindows(displayIDs: repairedDisplayIDs, raiseActiveWindows: false)
-            await refreshWindows(includeThumbnails: false)
+            await refreshWindows(includeThumbnails: false, pruneMissingWindows: false)
         }
         overlayController.showArrangeBoard(model: self, displays: displays)
         isArrangeBoardVisible = true
@@ -174,6 +187,161 @@ final class AppModel: ObservableObject {
         _ = repairStacksFromWindowPositionsIfNeeded(for: targetDisplays())
         arrangeAssignedWindows()
         showHUD("Arranged \(arrangeAllDisplays ? "all displays" : "active display")")
+    }
+
+    func modeCapturePreview(displayID: String) -> ModeCapturePreview {
+        ModeCapturePreview(windowsByRole: capturedModeWindows(displayID: displayID))
+    }
+
+    @discardableResult
+    func saveMode(name rawName: String, replacing existingID: UUID?, displayID: String) -> SavedMode? {
+        let cleanedName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = cleanedName.isEmpty ? "Mode \(savedModes.count + 1)" : cleanedName
+        let captured = capturedModeWindows(displayID: displayID)
+        let windows = ColumnRole.allCases.flatMap { role in
+            captured[role, default: []]
+        }
+
+        guard !windows.isEmpty else {
+            showHUD("Assign windows before saving a mode")
+            return nil
+        }
+
+        let now = Date()
+        var modes = savedModes
+        let slot: Int
+        let id: UUID
+        let createdAt: Date
+
+        if let existingID,
+           let index = modes.firstIndex(where: { $0.id == existingID }) {
+            slot = modes[index].slot
+            id = existingID
+            createdAt = modes[index].createdAt
+            modes.remove(at: index)
+        } else {
+            slot = ModeSlotAssignment.firstAvailableSlot(in: modes)
+            id = UUID()
+            createdAt = now
+        }
+
+        let mode = SavedMode(
+            id: id,
+            name: name,
+            slot: slot,
+            windows: windows,
+            createdAt: createdAt,
+            updatedAt: now
+        )
+        modes.append(mode)
+        savedModes = modes.sorted { lhs, rhs in lhs.slot < rhs.slot }
+        store.saveSavedModes(savedModes)
+        showHUD("\(mode.name) saved as \(mode.shortcutLabel)")
+        refocusArrangeBoardIfNeeded()
+        return mode
+    }
+
+    func mode(forSlot slot: Int) -> SavedMode? {
+        savedModes.first { $0.slot == slot }
+    }
+
+    func handleModeHotkey(slot: Int) async {
+        guard let mode = mode(forSlot: slot) else {
+            showHUD("No mode saved for Option+\(slot)")
+            return
+        }
+        await confirmOrLaunchMode(mode, policy: selectedLaunchPolicy())
+    }
+
+    func prepareModeLaunch(slot: Int) {
+        guard let mode = mode(forSlot: slot) else {
+            showHUD("No mode saved for Option+\(slot)")
+            return
+        }
+        modeLaunchConfirmation = .confirming(
+            mode: mode,
+            policy: .quitElsewhereAndReopenHere,
+            armedAt: Date()
+        )
+    }
+
+    func setLaunchConfirmationPolicy(_ policy: ModeLaunchPolicy) {
+        guard case .confirming(let mode, _, let armedAt) = modeLaunchConfirmation else { return }
+        modeLaunchConfirmation = .confirming(mode: mode, policy: policy, armedAt: armedAt)
+    }
+
+    func cancelModeLaunchConfirmation() {
+        modeLaunchConfirmation = .idle
+    }
+
+    func launchConfirmedMode() async {
+        guard case .confirming(let mode, let policy, _) = modeLaunchConfirmation else { return }
+        modeLaunchConfirmation = .idle
+        await launchMode(mode, policy: policy)
+    }
+
+    func launchModeFromPalette(_ mode: SavedMode) async {
+        modeLaunchConfirmation = .idle
+        await launchMode(mode, policy: .quitElsewhereAndReopenHere)
+    }
+
+    func activeModes(on display: DisplayInfo) -> [ActiveModeInstance] {
+        let spaceID = activeLayoutSpaceID()
+        return activeModeInstances
+            .filter { $0.displayID == display.id && $0.spaceID == spaceID && !$0.windowBindings.isEmpty }
+            .sorted { $0.startedAt > $1.startedAt }
+    }
+
+    func raiseModeInstance(id: UUID) async {
+        await refreshWindows(includeThumbnails: false)
+        guard let instance = activeModeInstances.first(where: { $0.id == id }) else {
+            showHUD("Mode is no longer active")
+            return
+        }
+        let liveWindows = instance.windowBindings.compactMap { binding in
+            windows.first { $0.id == binding.windowID }
+        }
+        guard !liveWindows.isEmpty else {
+            removeActiveModeInstance(id: id)
+            showHUD("Mode windows are gone")
+            return
+        }
+
+        for window in liveWindows {
+            if let binding = instance.windowBindings.first(where: { $0.windowID == window.id }),
+               let display = display(withID: instance.displayID) {
+                accessibility.moveResize(window, to: display.grid.rect(for: binding.role))
+            }
+        }
+        for role in [ColumnRole.left, .right, .center] {
+            liveWindows
+                .filter { window in
+                    instance.windowBindings.first(where: { $0.windowID == window.id })?.role == role
+                }
+                .forEach(accessibility.raise)
+        }
+        showHUD("Raised \(instance.modeName)")
+    }
+
+    func closeModeInstance(id: UUID) async {
+        await refreshWindows(includeThumbnails: false)
+        guard let instance = activeModeInstances.first(where: { $0.id == id }) else { return }
+        let bindingIDs = Set(instance.windowBindings.map(\.windowID))
+        let liveWindows = windows.filter { bindingIDs.contains($0.id) }
+
+        for window in liveWindows {
+            accessibility.closeWindowOnly(window)
+            removeWindowFromAllStacks(window.id)
+        }
+
+        removeActiveModeInstance(id: id)
+        saveAllStackStores()
+        showHUD("Closed \(instance.modeName)")
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            await refreshWindows(includeThumbnails: true)
+            refocusArrangeBoardIfNeeded()
+        }
     }
 
     @discardableResult
@@ -726,7 +894,7 @@ final class AppModel: ObservableObject {
         store.saveStacks(stacksByDisplay)
     }
 
-    private func refreshWindows(includeThumbnails: Bool) async {
+    private func refreshWindows(includeThumbnails: Bool, pruneMissingWindows: Bool = true) async {
         let raw = accessibility.visibleWindows(excluding: Bundle.main.bundleIdentifier)
         if includeThumbnails {
             windows = await thumbnails.attachThumbnails(to: raw)
@@ -740,7 +908,9 @@ final class AppModel: ObservableObject {
             }
         }
 
-        pruneStacksForVisibleWindowsIfSafe()
+        if pruneMissingWindows {
+            pruneStacksForVisibleWindowsIfSafe()
+        }
     }
 
     private func refreshDiaTabs() async {
@@ -801,7 +971,7 @@ final class AppModel: ObservableObject {
             activeBoardDesktopID = activeTarget.id
         }
         let previousWindows = windows
-        await refreshWindowsUntilStableAfterSpaceChange()
+        await refreshWindowsUntilStableForLayoutRead()
         _ = repairStacksFromWindowPositionsIfNeeded(
             for: boardDisplays(),
             previousWindows: previousWindows
@@ -812,10 +982,11 @@ final class AppModel: ObservableObject {
         refocusArrangeBoardIfNeeded()
     }
 
-    private func refreshWindowsUntilStableAfterSpaceChange() async {
+    private func refreshWindowsUntilStableForLayoutRead() async {
+        // Space changes can briefly produce partial AX snapshots; probe reads must not erase saved layout memory.
         var previousIDs: Set<String>?
         for _ in 0..<4 {
-            await refreshWindows(includeThumbnails: false)
+            await refreshWindows(includeThumbnails: false, pruneMissingWindows: false)
             let ids = Set(windows.map(\.id))
             if !ids.isEmpty, ids == previousIDs {
                 return
@@ -856,6 +1027,185 @@ final class AppModel: ObservableObject {
         }
 
         return window.appName.localizedCaseInsensitiveContains(item.name)
+    }
+
+    private func capturedModeWindows(displayID: String) -> [ColumnRole: [SavedModeWindow]] {
+        guard let display = display(withID: displayID) else { return [:] }
+        var captured: [ColumnRole: [SavedModeWindow]] = [:]
+        for role in ColumnRole.allCases {
+            let liveWindows = boardWindows(for: role, on: display)
+            captured[role] = liveWindows.enumerated().map { index, window in
+                SavedModeWindow(
+                    id: UUID(),
+                    role: role,
+                    order: index,
+                    bundleIdentifier: window.bundleIdentifier,
+                    appName: window.appName,
+                    titleHint: window.title
+                )
+            }
+        }
+        return captured
+    }
+
+    private func selectedLaunchPolicy() -> ModeLaunchPolicy {
+        if case .confirming(_, let policy, _) = modeLaunchConfirmation {
+            return policy
+        }
+        return .quitElsewhereAndReopenHere
+    }
+
+    private func confirmOrLaunchMode(_ mode: SavedMode, policy: ModeLaunchPolicy) async {
+        if case .confirming(let armedMode, let armedPolicy, let armedAt) = modeLaunchConfirmation,
+           armedMode.id == mode.id,
+           Date().timeIntervalSince(armedAt) <= 4 {
+            modeLaunchConfirmation = .idle
+            await launchMode(mode, policy: armedPolicy)
+            return
+        }
+
+        modeLaunchConfirmation = .confirming(mode: mode, policy: policy, armedAt: Date())
+        showHUD("Press \(mode.shortcutLabel) again to launch \(mode.name)")
+    }
+
+    private func launchMode(_ mode: SavedMode, policy: ModeLaunchPolicy) async {
+        guard permissions.isAccessibilityTrusted else {
+            showHUD("Grant Accessibility first")
+            return
+        }
+        guard let display = activeDisplay() ?? allDisplays().first else {
+            showHUD("No display available")
+            return
+        }
+
+        await refreshWindows(includeThumbnails: false)
+        var usedWindowIDs = Set<String>()
+        var bindings: [ActiveModeWindowBinding] = []
+
+        for target in mode.windows.sorted(by: { lhs, rhs in
+            if lhs.role == rhs.role {
+                return lhs.order < rhs.order
+            }
+            let lhsIndex = ColumnRole.allCases.firstIndex(of: lhs.role) ?? 0
+            let rhsIndex = ColumnRole.allCases.firstIndex(of: rhs.role) ?? 0
+            return lhsIndex < rhsIndex
+        }) {
+            if policy == .quitElsewhereAndReopenHere,
+               firstModeWindow(matching: target, excluding: usedWindowIDs) == nil {
+                terminateRunningApplication(matching: target)
+                try? await Task.sleep(nanoseconds: 180_000_000)
+                await refreshWindows(includeThumbnails: false)
+            }
+
+            let window: ManagedWindow?
+            if policy == .openNewHere {
+                window = await openModeWindow(target, forceNew: true)
+            } else if let existing = firstModeWindow(matching: target, excluding: usedWindowIDs) {
+                window = existing
+            } else {
+                window = await openModeWindow(target, forceNew: false)
+            }
+
+            guard let window else { continue }
+            usedWindowIDs.insert(window.id)
+            assign(windowID: window.id, to: target.role, displayID: display.id)
+            bindings.append(
+                ActiveModeWindowBinding(
+                    windowID: window.id,
+                    role: target.role,
+                    appName: window.appName,
+                    bundleIdentifier: window.bundleIdentifier
+                )
+            )
+        }
+
+        guard !bindings.isEmpty else {
+            showHUD("Could not launch \(mode.name)")
+            return
+        }
+
+        arrangeAssignedWindows(displayIDs: Set([display.id]), raiseActiveWindows: true)
+        let instance = ActiveModeInstance(
+            id: UUID(),
+            modeID: mode.id,
+            modeName: mode.name,
+            slot: mode.slot,
+            displayID: display.id,
+            spaceID: activeLayoutSpaceID(),
+            windowBindings: bindings,
+            startedAt: Date()
+        )
+        activeModeInstances.removeAll { existing in
+            existing.modeID == mode.id &&
+                existing.displayID == instance.displayID &&
+                existing.spaceID == instance.spaceID
+        }
+        activeModeInstances.append(instance)
+        showHUD("\(mode.name) active")
+
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            await refreshWindows(includeThumbnails: true)
+            await refreshDiaTabs()
+            refocusArrangeBoardIfNeeded()
+        }
+    }
+
+    private func firstModeWindow(matching target: SavedModeWindow, excluding usedWindowIDs: Set<String>) -> ManagedWindow? {
+        windows.first { window in
+            !usedWindowIDs.contains(window.id) && modeWindow(window, matches: target)
+        }
+    }
+
+    private func modeWindow(_ window: ManagedWindow, matches target: SavedModeWindow) -> Bool {
+        if window.bundleIdentifier == target.bundleIdentifier {
+            return true
+        }
+        if window.appName.localizedCaseInsensitiveContains(target.appName) {
+            return true
+        }
+        guard !target.titleHint.isEmpty else { return false }
+        return window.title.localizedCaseInsensitiveContains(target.titleHint)
+    }
+
+    private func openModeWindow(_ target: SavedModeWindow, forceNew: Bool) async -> ManagedWindow? {
+        let snapshot = BoardWindowLaunchSnapshot(windows: windows.filter { modeWindow($0, matches: target) })
+        if !target.bundleIdentifier.isEmpty {
+            _ = launchWithOpen(arguments: forceNew ? ["-n", "-b", target.bundleIdentifier] : ["-b", target.bundleIdentifier])
+        } else {
+            _ = launchWithOpen(arguments: forceNew ? ["-n", "-a", target.appName] : ["-a", target.appName])
+        }
+        return await waitForModeWindow(matching: target, excluding: snapshot)
+    }
+
+    private func waitForModeWindow(
+        matching target: SavedModeWindow,
+        excluding snapshot: BoardWindowLaunchSnapshot
+    ) async -> ManagedWindow? {
+        for _ in 0..<10 {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            await refreshWindows(includeThumbnails: true)
+            if let launched = windows.first(where: { modeWindow($0, matches: target) && !snapshot.contains($0) }) {
+                return launched
+            }
+            if let existing = windows.first(where: { modeWindow($0, matches: target) }) {
+                return existing
+            }
+        }
+        return nil
+    }
+
+    private func terminateRunningApplication(matching target: SavedModeWindow) {
+        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
+            if app.bundleIdentifier == target.bundleIdentifier ||
+                (app.localizedName?.localizedCaseInsensitiveContains(target.appName) == true) {
+                app.terminate()
+            }
+        }
+    }
+
+    private func removeActiveModeInstance(id: UUID) {
+        activeModeInstances.removeAll { $0.id == id }
     }
 
     private func waitForLaunchedWindow(

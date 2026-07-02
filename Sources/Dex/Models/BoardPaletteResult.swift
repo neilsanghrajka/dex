@@ -10,11 +10,14 @@ enum BoardPaletteMode: Equatable {
 }
 
 enum BoardPaletteResult: Identifiable, Equatable {
+    case savedMode(SavedMode)
     case application(InstalledApplication)
     case diaTab(DiaTab, parentAppName: String, parentBundleIdentifier: String)
 
     var id: String {
         switch self {
+        case .savedMode(let mode):
+            "mode:\(mode.id)"
         case .application(let application):
             "app:\(application.id)"
         case .diaTab(let tab, _, _):
@@ -24,6 +27,8 @@ enum BoardPaletteResult: Identifiable, Equatable {
 
     var title: String {
         switch self {
+        case .savedMode(let mode):
+            mode.name
         case .application(let application):
             application.name
         case .diaTab(let tab, _, _):
@@ -33,6 +38,8 @@ enum BoardPaletteResult: Identifiable, Equatable {
 
     var subtitle: String {
         switch self {
+        case .savedMode(let mode):
+            "\(mode.windows.count) windows"
         case .application(let application):
             application.bundleIdentifier ?? application.url.path
         case .diaTab(let tab, _, _):
@@ -45,11 +52,30 @@ enum BoardPaletteResult: Identifiable, Equatable {
         return false
     }
 
+    var isSavedMode: Bool {
+        if case .savedMode = self { return true }
+        return false
+    }
+
+    var rightAccessory: String? {
+        switch self {
+        case .savedMode(let mode):
+            mode.shortcutLabel
+        case .application, .diaTab:
+            nil
+        }
+    }
+
     func matches(_ query: String) -> Bool {
         let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return false }
 
         switch self {
+        case .savedMode(let mode):
+            return tokenizedMatch(
+                query: normalized,
+                corpus: "\(mode.name) mode saved mode \(mode.shortcutLabel) option \(mode.slot)"
+            )
         case .application(let application):
             return application.name.localizedCaseInsensitiveContains(normalized) ||
                 (application.bundleIdentifier?.localizedCaseInsensitiveContains(normalized) ?? false)
@@ -58,6 +84,14 @@ enum BoardPaletteResult: Identifiable, Equatable {
                 tab.url.localizedCaseInsensitiveContains(normalized) ||
                 parentAppName.localizedCaseInsensitiveContains(normalized)
         }
+    }
+
+    private func tokenizedMatch(query: String, corpus: String) -> Bool {
+        let normalizedCorpus = corpus.lowercased()
+        return query
+            .lowercased()
+            .split(separator: " ")
+            .allSatisfy { normalizedCorpus.contains($0) }
     }
 }
 

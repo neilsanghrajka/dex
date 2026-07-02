@@ -6,10 +6,12 @@ import QuartzCore
 final class EventMonitor {
     var onDoubleOption: (() -> Void)?
     var onCycle: ((CycleDirection, CycleTrigger) -> Void)?
+    var onModeHotkey: ((Int) -> Bool)?
     var onEscape: (() -> Void)?
     var onControlDragChanged: ((CGPoint) -> Void)?
     var onControlDragEnded: ((CGPoint) -> Void)?
     var shouldHandleCycle: (() -> Bool)?
+    var shouldHandleModeHotkeys: (() -> Bool)?
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -129,6 +131,10 @@ final class EventMonitor {
             DispatchQueue.main.async { self.onEscape?() }
             return false
         }
+        if shouldHandleModeHotkeys?() != false,
+           let slot = modeSlot(from: UInt16(keyCode), flags: event.flags) {
+            return onModeHotkey?(slot) ?? false
+        }
         if shouldHandleCycle?() == false {
             return false
         }
@@ -222,6 +228,31 @@ final class EventMonitor {
         flags.contains(.option)
     }
 
+    private func modeSlot(from keyCode: UInt16, flags: CGEventFlags) -> Int? {
+        guard flags.contains(.maskAlternate), !flags.contains(.maskShift) else { return nil }
+        return modeSlot(from: keyCode)
+    }
+
+    private func modeSlot(from keyCode: UInt16, flags: NSEvent.ModifierFlags) -> Int? {
+        guard flags.contains(.option), !flags.contains(.shift) else { return nil }
+        return modeSlot(from: keyCode)
+    }
+
+    private func modeSlot(from keyCode: UInt16) -> Int? {
+        switch keyCode {
+        case 18: 1
+        case 19: 2
+        case 20: 3
+        case 21: 4
+        case 23: 5
+        case 22: 6
+        case 26: 7
+        case 28: 8
+        case 25: 9
+        default: nil
+        }
+    }
+
     private func startNSEventFallbackMonitors() {
         guard globalKeyMonitor == nil else { return }
 
@@ -229,6 +260,11 @@ final class EventMonitor {
             if event.keyCode == 53 {
                 self?.onEscape?()
             } else {
+                if let slot = self?.modeSlot(from: event.keyCode, flags: event.modifierFlags),
+                   self?.shouldHandleModeHotkeys?() != false,
+                   self?.onModeHotkey?(slot) == true {
+                    return
+                }
                 _ = self?.handleArrowKey(code: event.keyCode, flags: event.modifierFlags)
             }
         }
@@ -236,6 +272,11 @@ final class EventMonitor {
             if event.keyCode == 53 {
                 self?.onEscape?()
                 return event
+            }
+            if let slot = self?.modeSlot(from: event.keyCode, flags: event.modifierFlags),
+               self?.shouldHandleModeHotkeys?() != false,
+               self?.onModeHotkey?(slot) == true {
+                return nil
             }
             if self?.handleArrowKey(code: event.keyCode, flags: event.modifierFlags) == true {
                 return nil

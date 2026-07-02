@@ -54,6 +54,24 @@ final class BoardPaletteSearchTests: XCTestCase {
         XCTAssertNotEqual(tab.id, application.id)
     }
 
+    func testSavedModeMatchesByModeNamePhrase() {
+        let mode = sampleMode(name: "Meeting", slot: 1)
+        let result = BoardPaletteResult.savedMode(mode)
+
+        XCTAssertEqual(BoardPaletteSearch.filtered([result], query: "m"), [result])
+        XCTAssertEqual(BoardPaletteSearch.filtered([result], query: "meeting mode"), [result])
+    }
+
+    func testSavedModeExposesShortcutAccessory() {
+        let mode = sampleMode(name: "Catchup", slot: 2)
+        let result = BoardPaletteResult.savedMode(mode)
+
+        XCTAssertEqual(result.title, "Catchup")
+        XCTAssertEqual(result.rightAccessory, "Option+2")
+        XCTAssertTrue(result.isSavedMode)
+        XCTAssertFalse(result.isDiaTab)
+    }
+
     private func sampleApplication(
         name: String,
         bundleIdentifier: String?
@@ -75,6 +93,26 @@ final class BoardPaletteSearchTests: XCTestCase {
             title: title,
             url: url,
             isFocused: false
+        )
+    }
+
+    private func sampleMode(name: String, slot: Int) -> SavedMode {
+        SavedMode(
+            id: UUID(),
+            name: name,
+            slot: slot,
+            windows: [
+                SavedModeWindow(
+                    id: UUID(),
+                    role: .center,
+                    order: 0,
+                    bundleIdentifier: "com.example.App",
+                    appName: "Example",
+                    titleHint: "Example"
+                )
+            ],
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
         )
     }
 }

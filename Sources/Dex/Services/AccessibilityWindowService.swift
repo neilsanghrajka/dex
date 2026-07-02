@@ -46,6 +46,12 @@ final class AccessibilityWindowService {
         }
     }
 
+    func closeWindowOnly(_ window: ManagedWindow) {
+        if let closeButton = copyAttribute(window.axElement, kAXCloseButtonAttribute) as! AXUIElement? {
+            AXUIElementPerformAction(closeButton, kAXPressAction as CFString)
+        }
+    }
+
     func pressNewWindowMenuItem(
         bundleIdentifiers: [String],
         appNames: [String],

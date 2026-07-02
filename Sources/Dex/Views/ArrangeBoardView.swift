@@ -1,6 +1,9 @@
 import AppKit
 import SwiftUI
 
+private let boardRunningAppsRowHeight: CGFloat = 88
+private let boardCombinedShelfRowHeight: CGFloat = 94
+
 private enum BoardNavigationDirection {
     case left
     case right
@@ -13,6 +16,21 @@ private struct BoardNavigationCandidate {
     let center: CGPoint
 }
 
+private func modeSlotNumber(forKeyCode keyCode: UInt16) -> Int? {
+    switch keyCode {
+    case 18: 1
+    case 19: 2
+    case 20: 3
+    case 21: 4
+    case 23: 5
+    case 22: 6
+    case 26: 7
+    case 28: 8
+    case 25: 9
+    default: nil
+    }
+}
+
 private enum BoardSelection: Equatable {
     case column(ColumnRole)
     case assigned(ColumnRole, String)
@@ -20,10 +38,12 @@ private enum BoardSelection: Equatable {
     case unassigned(String)
     case runningAppsArea
     case runningApplication(String)
+    case activeModesArea
+    case activeMode(UUID)
 
     var windowID: String? {
         switch self {
-        case .column, .unassignedArea, .runningAppsArea, .runningApplication:
+        case .column, .unassignedArea, .runningAppsArea, .runningApplication, .activeModesArea, .activeMode:
             nil
         case .assigned(_, let id), .unassigned(let id):
             id
@@ -34,19 +54,30 @@ private enum BoardSelection: Equatable {
         switch self {
         case .runningApplication(let id):
             id
-        case .column, .assigned, .unassignedArea, .unassigned, .runningAppsArea:
+        case .column, .assigned, .unassignedArea, .unassigned, .runningAppsArea, .activeModesArea, .activeMode:
+            nil
+        }
+    }
+
+    var activeModeID: UUID? {
+        switch self {
+        case .activeMode(let id):
+            id
+        case .column, .assigned, .unassignedArea, .unassigned, .runningAppsArea, .runningApplication, .activeModesArea:
             nil
         }
     }
 
     var itemID: String? {
         switch self {
-        case .column, .unassignedArea, .runningAppsArea:
+        case .column, .unassignedArea, .runningAppsArea, .activeModesArea:
             nil
         case .assigned(_, let id), .unassigned(let id):
             "window:\(id)"
         case .runningApplication(let id):
             "app:\(id)"
+        case .activeMode(let id):
+            "mode:\(id)"
         }
     }
 
@@ -54,7 +85,7 @@ private enum BoardSelection: Equatable {
         switch self {
         case .column(let role), .assigned(let role, _):
             role
-        case .unassignedArea, .unassigned, .runningAppsArea, .runningApplication:
+        case .unassignedArea, .unassigned, .runningAppsArea, .runningApplication, .activeModesArea, .activeMode:
             nil
         }
     }
@@ -67,6 +98,10 @@ private enum BoardSelection: Equatable {
         self.itemID == "app:\(appID)"
     }
 
+    func isSelected(modeID: UUID) -> Bool {
+        self.itemID == "mode:\(modeID)"
+    }
+
     func isSelected(column role: ColumnRole) -> Bool {
         self == .column(role)
     }
@@ -77,6 +112,10 @@ private enum BoardSelection: Equatable {
 
     var isRunningAppsAreaSelected: Bool {
         self == .runningAppsArea
+    }
+
+    var isActiveModesAreaSelected: Bool {
+        self == .activeModesArea
     }
 
     func isStillValid(with itemIDs: Set<String>) -> Bool {
@@ -101,6 +140,9 @@ struct ArrangeBoardView: View {
     @State private var selectedCleanupIDs: Set<String> = []
     @State private var cleanupSelectionIndex = 0
     @State private var isCleanupVisible = false
+    @State private var isSaveModeVisible = false
+    @State private var saveModeName = ""
+    @State private var saveModeSelectionIndex = 0
 
     var body: some View {
         GeometryReader { geometry in
@@ -108,11 +150,17 @@ struct ArrangeBoardView: View {
             let boardGutter = display.grid.gutter
             let metrics = layoutMetrics(for: visibleLocalRect)
             let bottomShelfHeight = metrics.bottomShelfHeight
-            let runningAppsHeight: CGFloat = 88
-            let openWindowsHeight = max(0, bottomShelfHeight - boardGutter - runningAppsHeight)
+            let activeModes = model.activeModes(on: display)
+            let bottomRowHeight = activeModes.isEmpty ? boardRunningAppsRowHeight : boardCombinedShelfRowHeight
+            let openWindowsHeight = max(0, bottomShelfHeight - boardGutter - bottomRowHeight)
             let centerStackHeight = metrics.centerStackHeight
             let unassignedWindows = model.unassignedWindows(on: display)
             let runningApps = model.runningApplicationsWithoutVisibleWindows(on: display)
+            let bottomSplit = bottomShelfSplit(
+                totalWidth: display.localRect(for: display.grid.rect(for: .center)).width,
+                gutter: boardGutter,
+                hasActiveModes: !activeModes.isEmpty
+            )
 
             ZStack(alignment: .topLeading) {
                 Rectangle()
@@ -187,25 +235,46 @@ struct ArrangeBoardView: View {
                                     }
                                 )
 
-                                RunningAppSwitcherStrip(
-                                    apps: runningApps,
-                                    size: CGSize(width: localRect.width, height: runningAppsHeight),
-                                    selection: selection,
-                                    isAreaSelected: selection?.isRunningAppsAreaSelected == true,
-                                    onAreaClicked: {
-                                        selection = .runningAppsArea
-                                    },
-                                    onAppClicked: { item in
-                                        selection = .runningApplication(item.id)
-                                        model.selectRunningApplication(item)
-                                    },
-                                    onAppDoubleClicked: { item in
-                                        selection = .runningApplication(item.id)
-                                        Task {
-                                            await model.openRunningApplication(item, in: activeRole(), displayID: display.id)
+                                HStack(spacing: boardGutter) {
+                                    RunningAppSwitcherStrip(
+                                        apps: runningApps,
+                                        size: CGSize(width: bottomSplit.runningWidth, height: bottomRowHeight),
+                                        selection: selection,
+                                        isAreaSelected: selection?.isRunningAppsAreaSelected == true,
+                                        onAreaClicked: {
+                                            selection = .runningAppsArea
+                                        },
+                                        onAppClicked: { item in
+                                            selection = .runningApplication(item.id)
+                                            model.selectRunningApplication(item)
+                                        },
+                                        onAppDoubleClicked: { item in
+                                            selection = .runningApplication(item.id)
+                                            Task {
+                                                await model.openRunningApplication(item, in: activeRole(), displayID: display.id)
+                                            }
                                         }
+                                    )
+
+                                    if !activeModes.isEmpty {
+                                        ActiveModeStrip(
+                                            modes: activeModes,
+                                            size: CGSize(width: bottomSplit.activeModesWidth, height: bottomRowHeight),
+                                            selection: selection,
+                                            isAreaSelected: selection?.isActiveModesAreaSelected == true,
+                                            onAreaClicked: {
+                                                selection = .activeModesArea
+                                            },
+                                            onModeClicked: { instance in
+                                                selection = .activeMode(instance.id)
+                                            },
+                                            onModeDoubleClicked: { instance in
+                                                selection = .activeMode(instance.id)
+                                                Task { await model.raiseModeInstance(id: instance.id) }
+                                            }
+                                        )
                                     }
-                                )
+                                }
                             }
                             .frame(width: localRect.width, height: metrics.columnsHeight, alignment: .top)
                         } else {
@@ -260,7 +329,7 @@ struct ArrangeBoardView: View {
             }
             .contentShape(Rectangle())
             .overlay {
-                if !isPaletteVisible && !isCleanupVisible {
+                if !isPaletteVisible && !isCleanupVisible && !isSaveModeVisible {
                     BoardKeyboardCapture { event in
                         handleKeyDown(event)
                     }
@@ -271,13 +340,12 @@ struct ArrangeBoardView: View {
             .overlay {
                 if isPaletteVisible {
                     BoardPaletteOverlay(
-                        query: paletteQuery,
+                        query: $paletteQuery,
                         results: filteredPaletteResults,
-                        shortcuts: BoardAppShortcut.allCases.map { ($0.spec.label, shortcutLabel(model.shortcut(for: $0))) },
+                        shortcuts: model.savedModes.map { ($0.name, $0.shortcutLabel) } +
+                            BoardAppShortcut.allCases.map { ($0.spec.label, shortcutLabel(model.shortcut(for: $0))) },
                         isLoading: isPaletteLoading,
                         selectedIndex: $paletteSelectionIndex,
-                        onText: appendPaletteText,
-                        onBackspace: deletePaletteCharacter,
                         onMove: movePaletteSelection,
                         onSubmit: openSelectedPaletteResult,
                         onCancel: closePalette
@@ -297,8 +365,53 @@ struct ArrangeBoardView: View {
                     .zIndex(40)
                 }
             }
+            .overlay {
+                if isSaveModeVisible {
+                    SaveModeOverlay(
+                        name: $saveModeName,
+                        modes: model.savedModes,
+                        preview: model.modeCapturePreview(displayID: display.id),
+                        selectedModeIndex: $saveModeSelectionIndex,
+                        onMoveSelection: moveSaveModeSelection,
+                        onSaveNew: saveModeAsNew,
+                        onReplace: replaceSelectedMode,
+                        onCancel: closeSaveMode
+                    )
+                    .zIndex(45)
+                }
+            }
+            .overlay {
+                if case .confirming(let mode, let policy, _) = model.modeLaunchConfirmation {
+                    ModeLaunchConfirmationOverlay(
+                        mode: mode,
+                        policy: policy,
+                        onPolicyChange: model.setLaunchConfirmationPolicy,
+                        onLaunch: {
+                            Task { await model.launchConfirmedMode() }
+                        },
+                        onCancel: model.cancelModeLaunchConfirmation
+                    )
+                    .zIndex(44)
+                }
+            }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .onExitCommand {
+                if isPaletteVisible {
+                    closePalette()
+                    return
+                }
+                if isCleanupVisible {
+                    closeCleanup()
+                    return
+                }
+                if isSaveModeVisible {
+                    closeSaveMode()
+                    return
+                }
+                if case .confirming = model.modeLaunchConfirmation {
+                    model.cancelModeLaunchConfirmation()
+                    return
+                }
                 model.closeArrangeBoard()
             }
             .onAppear {
@@ -315,10 +428,15 @@ struct ArrangeBoardView: View {
         ColumnRole.allCases.flatMap { windows(for: $0).map { "window:\($0.id)" } }
             + model.unassignedWindows(on: display).map { "window:\($0.id)" }
             + runningApps.map { "app:\($0.id)" }
+            + activeModes.map { "mode:\($0.id)" }
     }
 
     private var runningApps: [RunningApplicationItem] {
         model.runningApplicationsWithoutVisibleWindows(on: display)
+    }
+
+    private var activeModes: [ActiveModeInstance] {
+        model.activeModes(on: display)
     }
 
     private var filteredPaletteResults: [BoardPaletteResult] {
@@ -326,7 +444,9 @@ struct ArrangeBoardView: View {
     }
 
     private var paletteResults: [BoardPaletteResult] {
-        diaTabPaletteResults() + paletteApplications.map(BoardPaletteResult.application)
+        model.savedModes.map(BoardPaletteResult.savedMode) +
+            diaTabPaletteResults() +
+            paletteApplications.map(BoardPaletteResult.application)
     }
 
     private func windows(for role: ColumnRole) -> [ManagedWindow] {
@@ -375,6 +495,60 @@ struct ArrangeBoardView: View {
         return (headerHeight, columnsHeight, bottomShelfHeight, centerStackHeight)
     }
 
+    private func bottomShelfSplit(
+        totalWidth: CGFloat,
+        gutter: CGFloat,
+        hasActiveModes: Bool
+    ) -> (runningWidth: CGFloat, activeModesWidth: CGFloat) {
+        guard hasActiveModes else {
+            return (max(0, totalWidth), 0)
+        }
+
+        var activeWidth = min(340, max(230, totalWidth * 0.36))
+        let preferredRunningWidth: CGFloat = 380
+        activeWidth = min(activeWidth, max(190, totalWidth - preferredRunningWidth - gutter))
+        if totalWidth < 560 {
+            activeWidth = max(170, totalWidth * 0.36)
+        }
+        activeWidth = min(activeWidth, max(0, totalWidth - gutter))
+        return (max(0, totalWidth - activeWidth - gutter), max(0, activeWidth))
+    }
+
+    private func bottomShelfRects(
+        for visibleLocalRect: CGRect
+    ) -> (openWindows: CGRect, runningApps: CGRect, activeModes: CGRect?) {
+        let boardGutter = display.grid.gutter
+        let metrics = layoutMetrics(for: visibleLocalRect)
+        let centerRect = display.localRect(for: display.grid.rect(for: .center))
+        let hasActiveModes = !activeModes.isEmpty
+        let bottomRowHeight = hasActiveModes ? boardCombinedShelfRowHeight : boardRunningAppsRowHeight
+        let openWindowsHeight = max(0, metrics.bottomShelfHeight - boardGutter - bottomRowHeight)
+        let openWindowsRect = CGRect(
+            x: centerRect.minX,
+            y: visibleLocalRect.minY + metrics.headerHeight + boardGutter + metrics.centerStackHeight + boardGutter,
+            width: centerRect.width,
+            height: openWindowsHeight
+        )
+        let split = bottomShelfSplit(
+            totalWidth: centerRect.width,
+            gutter: boardGutter,
+            hasActiveModes: hasActiveModes
+        )
+        let runningAppsRect = CGRect(
+            x: centerRect.minX,
+            y: openWindowsRect.maxY + boardGutter,
+            width: split.runningWidth,
+            height: bottomRowHeight
+        )
+        let activeModesRect = hasActiveModes ? CGRect(
+            x: runningAppsRect.maxX + boardGutter,
+            y: runningAppsRect.minY,
+            width: split.activeModesWidth,
+            height: bottomRowHeight
+        ) : nil
+        return (openWindowsRect, runningAppsRect, activeModesRect)
+    }
+
     private func applyPendingBoardFocusOrEnsureSelection() {
         guard let request = model.consumePendingBoardFocusRequest() else {
             ensureSelection()
@@ -418,16 +592,35 @@ struct ArrangeBoardView: View {
             return
         }
 
+        if let activeMode = activeModes.first {
+            selection = .activeMode(activeMode.id)
+            return
+        }
+
         selection = .column(.center)
     }
 
     private func handleKeyDown(_ event: NSEvent) -> Bool {
+        if handleModeConfirmationKeyDown(event) {
+            return true
+        }
+
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if flags.contains(.option) {
             let optionKey = event.charactersIgnoringModifiers?.lowercased()
 
             if event.keyCode == 48 {
                 switchFocusArea(reverse: flags.contains(.shift))
+                return true
+            }
+
+            if optionKey == "s" {
+                showSaveMode()
+                return true
+            }
+
+            if let slot = modeSlot(for: event) {
+                Task { await model.handleModeHotkey(slot: slot) }
                 return true
             }
 
@@ -555,6 +748,8 @@ struct ArrangeBoardView: View {
             return .openWindows
         case .runningAppsArea, .runningApplication:
             return .runningApps
+        case .activeModesArea, .activeMode:
+            return .activeModes
         }
     }
 
@@ -570,6 +765,15 @@ struct ArrangeBoardView: View {
                 selection = .runningApplication(first.id)
             } else {
                 selection = .runningAppsArea
+            }
+            return
+        }
+
+        if area == .activeModes {
+            if let first = activeModes.first {
+                selection = .activeMode(first.id)
+            } else {
+                selection = .activeModesArea
             }
             return
         }
@@ -619,9 +823,8 @@ struct ArrangeBoardView: View {
     private func visualNavigationCandidates() -> [BoardNavigationCandidate] {
         let visibleLocalRect = display.localRect(for: display.visibleFrame)
         let boardGutter = display.grid.gutter
-        let runningAppsHeight: CGFloat = 88
         let metrics = layoutMetrics(for: visibleLocalRect)
-        let openWindowsHeight = max(0, metrics.bottomShelfHeight - boardGutter - runningAppsHeight)
+        let shelfRects = bottomShelfRects(for: visibleLocalRect)
         let columnsTopY = visibleLocalRect.minY + metrics.headerHeight + boardGutter
 
         var candidates: [BoardNavigationCandidate] = []
@@ -637,21 +840,11 @@ struct ArrangeBoardView: View {
             candidates.append(contentsOf: navigationCandidatesForAssignedWindows(role: role, zoneRect: zoneRect))
         }
 
-        let centerRect = display.localRect(for: display.grid.rect(for: .center))
-        let openWindowsRect = CGRect(
-            x: centerRect.minX,
-            y: columnsTopY + metrics.centerStackHeight + boardGutter,
-            width: centerRect.width,
-            height: openWindowsHeight
-        )
-        let runningAppsRect = CGRect(
-            x: centerRect.minX,
-            y: openWindowsRect.maxY + boardGutter,
-            width: centerRect.width,
-            height: runningAppsHeight
-        )
-        candidates.append(contentsOf: navigationCandidatesForUnassignedWindows(zoneRect: openWindowsRect))
-        candidates.append(contentsOf: navigationCandidatesForRunningApps(zoneRect: runningAppsRect))
+        candidates.append(contentsOf: navigationCandidatesForUnassignedWindows(zoneRect: shelfRects.openWindows))
+        candidates.append(contentsOf: navigationCandidatesForRunningApps(zoneRect: shelfRects.runningApps))
+        if let activeModesRect = shelfRects.activeModes {
+            candidates.append(contentsOf: navigationCandidatesForActiveModes(zoneRect: activeModesRect))
+        }
         return candidates
     }
 
@@ -721,6 +914,28 @@ struct ArrangeBoardView: View {
         }
     }
 
+    private func navigationCandidatesForActiveModes(zoneRect: CGRect) -> [BoardNavigationCandidate] {
+        let modes = activeModes
+        guard !modes.isEmpty else { return [] }
+
+        let cardWidth: CGFloat = 150
+        let spacing: CGFloat = 12
+        let viewportWidth = max(0, zoneRect.width - 36)
+        let contentWidth = CGFloat(modes.count) * cardWidth + CGFloat(max(modes.count - 1, 0)) * spacing
+        let centeringInset = max(0, (viewportWidth - contentWidth) / 2)
+        let origin = CGPoint(x: zoneRect.minX + 18 + centeringInset, y: zoneRect.minY + 20)
+
+        return modes.enumerated().map { index, item in
+            BoardNavigationCandidate(
+                selection: .activeMode(item.id),
+                center: CGPoint(
+                    x: origin.x + CGFloat(index) * (cardWidth + spacing) + cardWidth / 2,
+                    y: origin.y + 30
+                )
+            )
+        }
+    }
+
     private func assignedGridMetrics(for zoneWidth: CGFloat) -> (columns: Int, cardWidth: CGFloat, cardHeight: CGFloat) {
         let availableWidth = max(180, zoneWidth - 36)
         let minimumWidth: CGFloat = availableWidth < 640 ? min(availableWidth, 340) : 360
@@ -764,29 +979,26 @@ struct ArrangeBoardView: View {
             )
         case .unassignedArea:
             let visibleLocalRect = display.localRect(for: display.visibleFrame)
-            let boardGutter = display.grid.gutter
-            let metrics = layoutMetrics(for: visibleLocalRect)
-            let bottomShelfHeight = metrics.bottomShelfHeight
-            let runningAppsHeight: CGFloat = 88
-            let openWindowsHeight = max(0, bottomShelfHeight - boardGutter - runningAppsHeight)
-            let centerRect = display.localRect(for: display.grid.rect(for: .center))
+            let shelfRects = bottomShelfRects(for: visibleLocalRect)
             return CGPoint(
-                x: centerRect.midX,
-                y: visibleLocalRect.minY + metrics.headerHeight + boardGutter + metrics.centerStackHeight + boardGutter + openWindowsHeight / 2
+                x: shelfRects.openWindows.midX,
+                y: shelfRects.openWindows.midY
             )
         case .runningAppsArea:
             let visibleLocalRect = display.localRect(for: display.visibleFrame)
-            let boardGutter = display.grid.gutter
-            let metrics = layoutMetrics(for: visibleLocalRect)
-            let bottomShelfHeight = metrics.bottomShelfHeight
-            let runningAppsHeight: CGFloat = 88
-            let openWindowsHeight = max(0, bottomShelfHeight - boardGutter - runningAppsHeight)
-            let centerRect = display.localRect(for: display.grid.rect(for: .center))
+            let shelfRects = bottomShelfRects(for: visibleLocalRect)
             return CGPoint(
-                x: centerRect.midX,
-                y: visibleLocalRect.minY + metrics.headerHeight + boardGutter + metrics.centerStackHeight + boardGutter + openWindowsHeight + boardGutter + runningAppsHeight / 2
+                x: shelfRects.runningApps.midX,
+                y: shelfRects.runningApps.midY
             )
-        case .assigned, .unassigned, .runningApplication:
+        case .activeModesArea:
+            let visibleLocalRect = display.localRect(for: display.visibleFrame)
+            let shelfRects = bottomShelfRects(for: visibleLocalRect)
+            guard let activeModesRect = shelfRects.activeModes else {
+                return CGPoint(x: shelfRects.runningApps.midX, y: shelfRects.runningApps.midY)
+            }
+            return CGPoint(x: activeModesRect.midX, y: activeModesRect.midY)
+        case .assigned, .unassigned, .runningApplication, .activeMode:
             return nil
         }
     }
@@ -853,6 +1065,11 @@ struct ArrangeBoardView: View {
             return
         }
 
+        if let modeID = selection?.activeModeID {
+            Task { await model.raiseModeInstance(id: modeID) }
+            return
+        }
+
         guard let appID = selection?.runningApplicationID,
               let item = runningApps.first(where: { $0.id == appID }) else {
             return
@@ -867,6 +1084,12 @@ struct ArrangeBoardView: View {
         if let windowID = selection?.windowID {
             selection = selectionAfterRemoving(windowID)
             model.closeBoardWindow(windowID: windowID)
+            return
+        }
+
+        if let modeID = selection?.activeModeID {
+            selection = selectionAfterRemovingActiveMode(modeID)
+            Task { await model.closeModeInstance(id: modeID) }
             return
         }
 
@@ -897,7 +1120,7 @@ struct ArrangeBoardView: View {
             let currentIndex = windows.firstIndex(where: { $0.id == windowID }) ?? 0
             let nextIndex = min(currentIndex, remaining.count - 1)
             return .unassigned(remaining[nextIndex].id)
-        case .column, .unassignedArea, .runningAppsArea, .runningApplication:
+        case .column, .unassignedArea, .runningAppsArea, .runningApplication, .activeModesArea, .activeMode:
             return selection
         }
     }
@@ -909,6 +1132,15 @@ struct ArrangeBoardView: View {
         let currentIndex = apps.firstIndex(where: { $0.id == appID }) ?? 0
         let nextIndex = min(currentIndex, remaining.count - 1)
         return .runningApplication(remaining[nextIndex].id)
+    }
+
+    private func selectionAfterRemovingActiveMode(_ modeID: UUID) -> BoardSelection? {
+        let modes = activeModes
+        let remaining = modes.filter { $0.id != modeID }
+        guard !remaining.isEmpty else { return .activeModesArea }
+        let currentIndex = modes.firstIndex(where: { $0.id == modeID }) ?? 0
+        let nextIndex = min(currentIndex, remaining.count - 1)
+        return .activeMode(remaining[nextIndex].id)
     }
 
     private func showPalette() {
@@ -935,17 +1167,6 @@ struct ArrangeBoardView: View {
         paletteSelectionIndex = 0
     }
 
-    private func appendPaletteText(_ text: String) {
-        paletteQuery.append(text)
-        paletteSelectionIndex = 0
-    }
-
-    private func deletePaletteCharacter() {
-        guard !paletteQuery.isEmpty else { return }
-        paletteQuery.removeLast()
-        paletteSelectionIndex = 0
-    }
-
     private func movePaletteSelection(_ direction: Int) {
         let results = filteredPaletteResults
         guard !results.isEmpty else {
@@ -965,6 +1186,11 @@ struct ArrangeBoardView: View {
         let index = min(paletteSelectionIndex, results.count - 1)
 
         switch results[index] {
+        case .savedMode(let mode):
+            closePalette()
+            Task {
+                await model.launchModeFromPalette(mode)
+            }
         case .application(let application):
             let role = activeRole()
             activeColumnRole = role
@@ -998,6 +1224,74 @@ struct ArrangeBoardView: View {
         closeCleanup()
         guard !selected.isEmpty else { return }
         model.closeCleanupCandidates(selected)
+    }
+
+    private func showSaveMode() {
+        saveModeName = ""
+        saveModeSelectionIndex = -1
+        isSaveModeVisible = true
+    }
+
+    private func closeSaveMode() {
+        isSaveModeVisible = false
+        saveModeName = ""
+        saveModeSelectionIndex = 0
+    }
+
+    private func saveModeAsNew() {
+        if model.saveMode(name: saveModeName, replacing: nil, displayID: display.id) != nil {
+            closeSaveMode()
+        }
+    }
+
+    private func replaceSelectedMode() {
+        guard model.savedModes.indices.contains(saveModeSelectionIndex) else {
+            saveModeAsNew()
+            return
+        }
+        let mode = model.savedModes[saveModeSelectionIndex]
+        if model.saveMode(name: saveModeName.isEmpty ? mode.name : saveModeName, replacing: mode.id, displayID: display.id) != nil {
+            closeSaveMode()
+        }
+    }
+
+    private func moveSaveModeSelection(_ direction: Int) {
+        let upperBound = model.savedModes.count - 1
+        saveModeSelectionIndex = min(max(saveModeSelectionIndex + direction, -1), upperBound)
+    }
+
+    private func modeSlot(for event: NSEvent) -> Int? {
+        modeSlotNumber(forKeyCode: event.keyCode)
+    }
+
+    private func handleModeConfirmationKeyDown(_ event: NSEvent) -> Bool {
+        guard case .confirming(let mode, _, _) = model.modeLaunchConfirmation else {
+            return false
+        }
+
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags.contains(.option),
+           modeSlot(for: event) == mode.slot {
+            Task { await model.launchConfirmedMode() }
+            return true
+        }
+
+        switch event.keyCode {
+        case 53:
+            model.cancelModeLaunchConfirmation()
+            return true
+        case 36, 76:
+            Task { await model.launchConfirmedMode() }
+            return true
+        case 123, 126:
+            model.setLaunchConfirmationPolicy(.quitElsewhereAndReopenHere)
+            return true
+        case 124, 125:
+            model.setLaunchConfirmationPolicy(.openNewHere)
+            return true
+        default:
+            return false
+        }
     }
 
     private func moveSelectedWindow(_ windowID: String, to role: ColumnRole) {
@@ -1275,6 +1569,8 @@ private struct RunningAppSwitcherStrip: View {
     let onAppDoubleClicked: (RunningApplicationItem) -> Void
 
     var body: some View {
+        let labelWidth = min(130, max(96, size.width * 0.24))
+
         ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(.white.opacity(isAreaSelected ? 0.15 : 0.055))
@@ -1291,7 +1587,7 @@ private struct RunningAppSwitcherStrip: View {
                 Label("Running Apps", systemImage: "app.dashed")
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.white.opacity(0.86))
-                    .frame(width: 130, alignment: .leading)
+                    .frame(width: labelWidth, alignment: .leading)
 
                 if apps.isEmpty {
                     Text("No hidden running apps")
@@ -1301,7 +1597,7 @@ private struct RunningAppSwitcherStrip: View {
                 } else {
                     let cardWidth: CGFloat = 82
                     let spacing: CGFloat = 12
-                    let viewportWidth = max(0, size.width - 130 - 44)
+                    let viewportWidth = max(0, size.width - labelWidth - 44)
                     let contentWidth = CGFloat(apps.count) * cardWidth +
                         CGFloat(max(apps.count - 1, 0)) * spacing
                     let centeringInset = max(0, (viewportWidth - contentWidth) / 2)
@@ -1392,6 +1688,131 @@ private struct RunningAppIconCard: View {
         } else {
             Image(systemName: "app.dashed")
                 .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(.black.opacity(0.72))
+        }
+    }
+}
+
+private struct ActiveModeStrip: View {
+    let modes: [ActiveModeInstance]
+    let size: CGSize
+    let selection: BoardSelection?
+    let isAreaSelected: Bool
+    let onAreaClicked: () -> Void
+    let onModeClicked: (ActiveModeInstance) -> Void
+    let onModeDoubleClicked: (ActiveModeInstance) -> Void
+
+    var body: some View {
+        let labelWidth = min(118, max(90, size.width * 0.38))
+        let chipWidth = min(142, max(112, size.width - labelWidth - 48))
+
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(.white.opacity(isAreaSelected ? 0.15 : 0.055))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(
+                            .white.opacity(isAreaSelected ? 0.72 : 0.18),
+                            style: StrokeStyle(lineWidth: isAreaSelected ? 2.5 : 1.2, dash: [8, 7])
+                        )
+                }
+                .allowsHitTesting(false)
+
+            HStack(spacing: 14) {
+                Label("Active Modes", systemImage: "square.grid.3x1.below.line.grid.1x2")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.86))
+                    .frame(width: labelWidth, alignment: .leading)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 12) {
+                        ForEach(modes) { mode in
+                            ActiveModeChip(
+                                mode: mode,
+                                isSelected: selection?.isSelected(modeID: mode.id) == true,
+                                onClicked: onModeClicked,
+                                onDoubleClicked: onModeDoubleClicked
+                            )
+                            .frame(width: chipWidth)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
+        }
+        .frame(width: size.width, height: size.height)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onAreaClicked)
+        .animation(.spring(response: 0.24, dampingFraction: 0.82), value: isAreaSelected)
+    }
+}
+
+private struct ActiveModeChip: View {
+    let mode: ActiveModeInstance
+    let isSelected: Bool
+    let onClicked: (ActiveModeInstance) -> Void
+    let onDoubleClicked: (ActiveModeInstance) -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: -6) {
+                ForEach(Array(mode.windowBindings.prefix(4).enumerated()), id: \.offset) { _, binding in
+                    modeIcon(for: binding)
+                        .frame(width: 24, height: 24)
+                        .padding(4)
+                        .background(.white.opacity(0.96), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(.black.opacity(0.08), lineWidth: 1)
+                        }
+                }
+                Spacer()
+                Text("\(mode.windowBindings.count)")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.74))
+            }
+
+            Text(mode.modeName)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+            Text(mode.shortcutLabel)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.white.opacity(0.58))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.white.opacity(isSelected ? 0.16 : (isHovered ? 0.08 : 0.035)), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(.white.opacity(isSelected ? 0.88 : (isHovered ? 0.26 : 0.12)), lineWidth: isSelected ? 2 : 1)
+        }
+        .scaleEffect(isHovered ? 1.03 : 1)
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+        .onTapGesture(count: 2) {
+            onDoubleClicked(mode)
+        }
+        .onTapGesture {
+            onClicked(mode)
+        }
+        .animation(.spring(response: 0.20, dampingFraction: 0.78), value: isHovered)
+        .animation(.spring(response: 0.22, dampingFraction: 0.82), value: isSelected)
+        .help("Return raises \(mode.modeName). Q closes its tracked windows.")
+    }
+
+    @ViewBuilder
+    private func modeIcon(for binding: ActiveModeWindowBinding) -> some View {
+        if let icon = AppIconCache.icon(for: binding.bundleIdentifier) {
+            Image(nsImage: icon)
+                .resizable()
+                .scaledToFit()
+        } else {
+            Image(systemName: "app.dashed")
+                .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(.black.opacity(0.72))
         }
     }
@@ -1732,13 +2153,6 @@ private struct BoardKeyboardCapture: NSViewRepresentable {
 
 private final class BoardKeyboardCaptureView: NSView {
     var onKeyDown: ((NSEvent) -> Bool)?
-    private var localMonitor: Any?
-
-    deinit {
-        if let localMonitor {
-            NSEvent.removeMonitor(localMonitor)
-        }
-    }
 
     override var acceptsFirstResponder: Bool {
         true
@@ -1746,27 +2160,9 @@ private final class BoardKeyboardCaptureView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        updateLocalMonitor()
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             window?.makeFirstResponder(self)
-        }
-    }
-
-    private func updateLocalMonitor() {
-        if let localMonitor {
-            NSEvent.removeMonitor(localMonitor)
-            self.localMonitor = nil
-        }
-
-        guard let targetWindow = window else { return }
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self, weak targetWindow] event in
-            guard let self,
-                  event.window === targetWindow,
-                  self.onKeyDown?(event) == true else {
-                return event
-            }
-            return nil
         }
     }
 
@@ -1778,33 +2174,355 @@ private final class BoardKeyboardCaptureView: NSView {
     }
 }
 
-private struct BoardPaletteOverlay: View {
-    let query: String
-    let results: [BoardPaletteResult]
-    let shortcuts: [(String, String)]
-    let isLoading: Bool
-    @Binding var selectedIndex: Int
-    let onText: (String) -> Void
-    let onBackspace: () -> Void
-    let onMove: (Int) -> Void
+private struct ModeNameTextField: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
     let onSubmit: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, onSubmit: onSubmit)
+    }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        field.placeholderString = placeholder
+        field.stringValue = text
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.textColor = .white
+        field.font = .systemFont(ofSize: 22, weight: .semibold)
+        field.delegate = context.coordinator
+        DispatchQueue.main.async {
+            field.window?.makeFirstResponder(field)
+        }
+        return field
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        let isEditing = nsView.window?.firstResponder === nsView.currentEditor()
+        if !isEditing && nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+        context.coordinator.text = $text
+        context.coordinator.onSubmit = onSubmit
+        DispatchQueue.main.async {
+            if nsView.window?.firstResponder !== nsView.currentEditor() {
+                nsView.window?.makeFirstResponder(nsView)
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var text: Binding<String>
+        var onSubmit: () -> Void
+
+        init(text: Binding<String>, onSubmit: @escaping () -> Void) {
+            self.text = text
+            self.onSubmit = onSubmit
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField else { return }
+            text.wrappedValue = field.stringValue
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                text.wrappedValue = control.stringValue
+                onSubmit()
+                return true
+            }
+            return false
+        }
+    }
+}
+
+private struct SaveModeOverlay: View {
+    @Binding var name: String
+    let modes: [SavedMode]
+    let preview: ModeCapturePreview
+    @Binding var selectedModeIndex: Int
+    let onMoveSelection: (Int) -> Void
+    let onSaveNew: () -> Void
+    let onReplace: () -> Void
     let onCancel: () -> Void
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.18)
+            Color.black.opacity(0.20)
                 .ignoresSafeArea()
                 .onTapGesture(perform: onCancel)
 
-            VStack(alignment: .leading, spacing: 0) {
-                if BoardPaletteSearch.isShowingShortcutHelp(query: query) {
-                    shortcutHelpContent
-                        .padding(22)
-                } else {
-                    searchContent
+            VStack(alignment: .leading, spacing: 18) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Save Mode")
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.white)
+                        Text("Capture the assigned windows on this desktop.")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.58))
+                    }
+                    Spacer()
+                    Button(action: onCancel) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 12, weight: .bold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white.opacity(0.72))
+                }
+
+                ModeNameTextField(
+                    text: $name,
+                    placeholder: "Mode name",
+                    onSubmit: {
+                        selectedModeIndex >= 0 ? onReplace() : onSaveNew()
+                    }
+                )
+                    .frame(height: 32)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(.white.opacity(0.20), lineWidth: 1)
+                    }
+
+                captureSummary
+
+                VStack(alignment: .leading, spacing: 8) {
+                    SaveModeChoiceRow(
+                        title: "Save as new mode",
+                        detail: "Return",
+                        isSelected: selectedModeIndex < 0
+                    )
+                    ForEach(Array(modes.enumerated()), id: \.element.id) { index, mode in
+                        SaveModeChoiceRow(
+                            title: "Replace \(mode.name)",
+                            detail: mode.shortcutLabel,
+                            isSelected: selectedModeIndex == index
+                        )
+                    }
                 }
             }
             .frame(width: 560)
+            .padding(22)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .strokeBorder(.white.opacity(0.22), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.34), radius: 38, y: 18)
+            .onExitCommand(perform: onCancel)
+            .onSubmit {
+                selectedModeIndex >= 0 ? onReplace() : onSaveNew()
+            }
+            .onMoveCommand { direction in
+                switch direction {
+                case .down:
+                    onMoveSelection(1)
+                case .up:
+                    onMoveSelection(-1)
+                default:
+                    break
+                }
+            }
+        }
+    }
+
+    private var captureSummary: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "square.grid.3x1.below.line.grid.1x2")
+                .font(.system(size: 23, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.82))
+                .frame(width: 34, height: 34)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Current arrangement")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text("\(capturedWindows.count) windows")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+
+            Spacer(minLength: 12)
+
+            HStack(spacing: 8) {
+                ForEach(ColumnRole.allCases) { role in
+                    ModeCaptureRoleGroup(
+                        role: role,
+                        windows: preview.windowsByRole[role, default: []]
+                    )
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+        }
+    }
+
+    private var capturedWindows: [SavedModeWindow] {
+        ColumnRole.allCases.flatMap { preview.windowsByRole[$0, default: []] }
+    }
+
+}
+
+private struct ModeCaptureRoleGroup: View {
+    let role: ColumnRole
+    let windows: [SavedModeWindow]
+
+    var body: some View {
+        HStack(spacing: -5) {
+            Text(String(role.title.prefix(1)))
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.white.opacity(0.62))
+                .frame(width: 18, height: 18)
+                .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+            if windows.isEmpty {
+                Image(systemName: "minus")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.35))
+                    .frame(width: 18, height: 18)
+            } else {
+                ForEach(Array(windows.prefix(3).enumerated()), id: \.element.id) { _, window in
+                    AppBundleIcon(bundleIdentifier: window.bundleIdentifier, fallbackSystemName: "app.dashed")
+                        .frame(width: 18, height: 18)
+                        .padding(3)
+                        .background(.white.opacity(0.96), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .strokeBorder(.black.opacity(0.08), lineWidth: 1)
+                        }
+                }
+            }
+        }
+        .help("\(role.title): \(windows.count) windows")
+    }
+}
+
+private struct AppBundleIcon: View {
+    let bundleIdentifier: String
+    let fallbackSystemName: String
+
+    var body: some View {
+        if let icon = AppIconCache.icon(for: bundleIdentifier) {
+            Image(nsImage: icon)
+                .resizable()
+                .scaledToFit()
+        } else {
+            Image(systemName: fallbackSystemName)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.black.opacity(0.72))
+        }
+    }
+}
+
+private struct SaveModeChoiceRow: View {
+    let title: String
+    let detail: String
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "square.grid.3x1.below.line.grid.1x2")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.82))
+                .frame(width: 34, height: 34)
+
+            Text(title)
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+
+            Spacer()
+
+            Text(detail)
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.white.opacity(0.72))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(.white.opacity(0.10), in: Capsule())
+
+            if isSelected {
+                Image(systemName: "return")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.62))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(.white.opacity(isSelected ? 0.16 : 0.045), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(isSelected ? 0.72 : 0.12), lineWidth: isSelected ? 1.5 : 1)
+        }
+    }
+}
+
+private struct ModeLaunchConfirmationOverlay: View {
+    let mode: SavedMode
+    let policy: ModeLaunchPolicy
+    let onPolicyChange: (ModeLaunchPolicy) -> Void
+    let onLaunch: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.16)
+                .ignoresSafeArea()
+                .onTapGesture(perform: onCancel)
+
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .center, spacing: 12) {
+                    Image(systemName: "square.grid.3x1.below.line.grid.1x2")
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.86))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(mode.name)
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.white)
+                        Text("Press \(mode.shortcutLabel) again to launch")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.58))
+                    }
+                    Spacer()
+                    Text(mode.shortcutLabel)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white.opacity(0.74))
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background(.white.opacity(0.12), in: Capsule())
+                }
+
+                HStack(spacing: -6) {
+                    ForEach(Array(mode.windows.prefix(6).enumerated()), id: \.offset) { _, window in
+                        modeIcon(bundleIdentifier: window.bundleIdentifier)
+                            .frame(width: 28, height: 28)
+                            .padding(5)
+                            .background(.white.opacity(0.96), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    LaunchPolicyRow(
+                        title: "Quit elsewhere and reopen here",
+                        isSelected: policy == .quitElsewhereAndReopenHere
+                    )
+                    LaunchPolicyRow(
+                        title: "Open new here",
+                        isSelected: policy == .openNewHere
+                    )
+                }
+            }
+            .frame(width: 470)
+            .padding(20)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
@@ -1818,6 +2536,104 @@ private struct BoardPaletteOverlay: View {
                 .frame(width: 1, height: 1)
                 .opacity(0.001)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func modeIcon(bundleIdentifier: String) -> some View {
+        if let icon = AppIconCache.icon(for: bundleIdentifier) {
+            Image(nsImage: icon)
+                .resizable()
+                .scaledToFit()
+        } else {
+            Image(systemName: "app.dashed")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.black.opacity(0.72))
+        }
+    }
+
+    private func handleKeyDown(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags.contains(.option),
+           modeSlotNumber(forKeyCode: event.keyCode) == mode.slot {
+            onLaunch()
+            return true
+        }
+
+        switch event.keyCode {
+        case 53:
+            onCancel()
+            return true
+        case 36, 76:
+            onLaunch()
+            return true
+        case 123, 126:
+            onPolicyChange(.quitElsewhereAndReopenHere)
+            return true
+        case 124, 125:
+            onPolicyChange(.openNewHere)
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+private struct LaunchPolicyRow: View {
+    let title: String
+    let isSelected: Bool
+
+    var body: some View {
+        HStack {
+            Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                .font(.caption.weight(.bold))
+            Text(title)
+                .font(.callout.weight(.semibold))
+            Spacer()
+        }
+        .foregroundStyle(.white.opacity(isSelected ? 0.92 : 0.62))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(.white.opacity(isSelected ? 0.14 : 0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+private struct BoardPaletteOverlay: View {
+    @Binding var query: String
+    let results: [BoardPaletteResult]
+    let shortcuts: [(String, String)]
+    let isLoading: Bool
+    @Binding var selectedIndex: Int
+    let onMove: (Int) -> Void
+    let onSubmit: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.18)
+                .ignoresSafeArea()
+                .onTapGesture(perform: onCancel)
+
+            VStack(alignment: .leading, spacing: 0) {
+                searchHeader
+
+                Divider()
+                    .overlay(.white.opacity(0.18))
+
+                if BoardPaletteSearch.isShowingShortcutHelp(query: query) {
+                    shortcutHelpContent
+                        .padding(22)
+                } else {
+                    searchResultsContent
+                }
+            }
+            .frame(width: 560)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .strokeBorder(.white.opacity(0.22), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.34), radius: 38, y: 18)
             .onChange(of: query) {
                 selectedIndex = 0
             }
@@ -1827,21 +2643,31 @@ private struct BoardPaletteOverlay: View {
         }
     }
 
+    private var searchHeader: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.72))
+            PaletteSearchTextField(
+                text: $query,
+                onSubmit: submitIfSearchIsVisible,
+                onCancel: onCancel,
+                onMove: onMove
+            )
+            .frame(height: 24)
+            Button(action: onCancel) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .bold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white.opacity(0.72))
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+    }
+
     private var shortcutHelpContent: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack {
-                Text("Activation Shortcuts")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.white)
-                Spacer()
-                Button(action: onCancel) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .bold))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.white.opacity(0.72))
-            }
-
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 10) {
                 ShortcutHelpRow(keys: "Arrows", label: "Move selection")
                 ShortcutHelpRow(keys: "Enter", label: "Open selected item")
@@ -1867,24 +2693,8 @@ private struct BoardPaletteOverlay: View {
         }
     }
 
-    private var searchContent: some View {
+    private var searchResultsContent: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 12) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.72))
-                Text(query)
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                Spacer()
-            }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 14)
-
-            Divider()
-                .overlay(.white.opacity(0.18))
-
             if results.isEmpty {
                 Text(isLoading ? "Loading apps and Dia tabs..." : "No matches")
                     .font(.callout.weight(.semibold))
@@ -1912,50 +2722,104 @@ private struct BoardPaletteOverlay: View {
         }
     }
 
-    private func handleKeyDown(_ event: NSEvent) -> Bool {
-        switch event.keyCode {
-        case 53:
-            onCancel()
-            return true
-        case 36, 76:
-            if BoardPaletteSearch.isShowingShortcutHelp(query: query) {
+    private func submitIfSearchIsVisible() {
+        guard !BoardPaletteSearch.isShowingShortcutHelp(query: query) else { return }
+        onSubmit()
+    }
+}
+
+private struct PaletteSearchTextField: NSViewRepresentable {
+    @Binding var text: String
+    let onSubmit: () -> Void
+    let onCancel: () -> Void
+    let onMove: (Int) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, onSubmit: onSubmit, onCancel: onCancel, onMove: onMove)
+    }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        field.stringValue = text
+        field.placeholderString = ""
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.textColor = .white
+        field.font = .systemFont(ofSize: 18, weight: .medium)
+        field.delegate = context.coordinator
+        field.cell?.usesSingleLineMode = true
+        field.cell?.lineBreakMode = .byTruncatingTail
+        DispatchQueue.main.async {
+            field.window?.makeFirstResponder(field)
+        }
+        return field
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        let isEditing = nsView.window?.firstResponder === nsView.currentEditor()
+        if !isEditing && nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+        context.coordinator.text = $text
+        context.coordinator.onSubmit = onSubmit
+        context.coordinator.onCancel = onCancel
+        context.coordinator.onMove = onMove
+        DispatchQueue.main.async {
+            if nsView.window?.firstResponder !== nsView.currentEditor() {
+                nsView.window?.makeFirstResponder(nsView)
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var text: Binding<String>
+        var onSubmit: () -> Void
+        var onCancel: () -> Void
+        var onMove: (Int) -> Void
+
+        init(
+            text: Binding<String>,
+            onSubmit: @escaping () -> Void,
+            onCancel: @escaping () -> Void,
+            onMove: @escaping (Int) -> Void
+        ) {
+            self.text = text
+            self.onSubmit = onSubmit
+            self.onCancel = onCancel
+            self.onMove = onMove
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField else { return }
+            if field.stringValue == "/" {
+                field.stringValue = ""
+                text.wrappedValue = ""
+                onCancel()
+                return
+            }
+            text.wrappedValue = field.stringValue
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            switch commandSelector {
+            case #selector(NSResponder.insertNewline(_:)):
+                text.wrappedValue = control.stringValue
+                onSubmit()
                 return true
-            }
-            onSubmit()
-            return true
-        case 125:
-            if !BoardPaletteSearch.isShowingShortcutHelp(query: query) {
+            case #selector(NSResponder.cancelOperation(_:)):
+                onCancel()
+                return true
+            case #selector(NSResponder.moveDown(_:)):
                 onMove(1)
-            }
-            return true
-        case 126:
-            if !BoardPaletteSearch.isShowingShortcutHelp(query: query) {
+                return true
+            case #selector(NSResponder.moveUp(_:)):
                 onMove(-1)
+                return true
+            default:
+                return false
             }
-            return true
-        case 51:
-            onBackspace()
-            return true
-        default:
-            break
         }
-
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard !flags.contains(.command),
-              !flags.contains(.control),
-              !flags.contains(.option),
-              let text = event.charactersIgnoringModifiers,
-              text.count == 1,
-              text.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else {
-            return false
-        }
-
-        if text == "/" && query.isEmpty {
-            onCancel()
-        } else {
-            onText(text)
-        }
-        return true
     }
 }
 
@@ -1981,6 +2845,24 @@ private struct BoardPaletteResultRow: View {
             }
 
             Spacer()
+
+            if let accessory = result.rightAccessory {
+                Text(accessory)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.72))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.white.opacity(0.10), in: Capsule())
+            }
+
+            if result.isSavedMode {
+                Text("Mode")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(.white.opacity(0.10), in: Capsule())
+            }
 
             if result.isDiaTab {
                 Text("Dia tab")
@@ -2008,6 +2890,10 @@ private struct BoardPaletteResultRow: View {
     @ViewBuilder
     private var icon: some View {
         switch result {
+        case .savedMode:
+            Image(systemName: "square.grid.3x1.below.line.grid.1x2")
+                .font(.system(size: 23, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.82))
         case .application(let application):
             Image(nsImage: NSWorkspace.shared.icon(forFile: application.url.path))
                 .resizable()

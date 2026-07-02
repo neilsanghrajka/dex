@@ -63,6 +63,6 @@ final class RunningApplicationFilterTests: XCTestCase {
 
 final class BoardFocusAreaTests: XCTestCase {
     func testFocusAreaOrderStartsWithColumns() {
-        XCTAssertEqual(BoardFocusArea.allCases, [.left, .center, .right, .openWindows, .runningApps])
+        XCTAssertEqual(BoardFocusArea.allCases, [.left, .center, .right, .openWindows, .runningApps, .activeModes])
     }
 }

@@ -99,4 +99,39 @@ final class LayoutWorkspaceTests: XCTestCase {
         XCTAssertNotNil(defaults.data(forKey: "dex.columnStacksByWorkspace"))
         XCTAssertNotNil(defaults.data(forKey: "dex.boardShortcutMappings"))
     }
+
+    func testLayoutStorePersistsSavedModesBySlot() {
+        let suiteName = "DexTests.savedModes"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let store = LayoutStore(defaults: defaults)
+
+        let later = sampleMode(name: "Catchup", slot: 2)
+        let earlier = sampleMode(name: "Meeting", slot: 1)
+
+        store.saveSavedModes([later, earlier])
+
+        XCTAssertEqual(store.loadSavedModes().map(\.name), ["Meeting", "Catchup"])
+        XCTAssertEqual(store.loadSavedModes().first?.windows.first?.role, .center)
+    }
+
+    private func sampleMode(name: String, slot: Int) -> SavedMode {
+        SavedMode(
+            id: UUID(),
+            name: name,
+            slot: slot,
+            windows: [
+                SavedModeWindow(
+                    id: UUID(),
+                    role: .center,
+                    order: 0,
+                    bundleIdentifier: "com.example.App",
+                    appName: "Example",
+                    titleHint: "Example"
+                )
+            ],
+            createdAt: Date(timeIntervalSince1970: Double(slot)),
+            updatedAt: Date(timeIntervalSince1970: Double(slot))
+        )
+    }
 }

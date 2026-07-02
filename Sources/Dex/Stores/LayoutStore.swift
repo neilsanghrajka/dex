@@ -13,6 +13,7 @@ final class LayoutStore {
     private let legacyAllDisplaysKey = "nile.arrangeAllDisplays"
     private let shortcutMappingsKey = "dex.boardShortcutMappings"
     private let legacyShortcutMappingsKey = "nile.boardShortcutMappings"
+    private let savedModesKey = "dex.savedModes"
 
     init(defaults: UserDefaults = .standard, legacyDefaults: UserDefaults? = nil) {
         self.defaults = defaults
@@ -87,6 +88,31 @@ final class LayoutStore {
         })
         guard let data = try? JSONEncoder().encode(raw) else { return }
         defaults.set(data, forKey: shortcutMappingsKey)
+    }
+
+    func loadSavedModes() -> [SavedMode] {
+        guard let data = defaults.data(forKey: savedModesKey),
+              let modes = try? JSONDecoder().decode([SavedMode].self, from: data) else {
+            return []
+        }
+
+        return modes.sorted { lhs, rhs in
+            if lhs.slot == rhs.slot {
+                return lhs.updatedAt > rhs.updatedAt
+            }
+            return lhs.slot < rhs.slot
+        }
+    }
+
+    func saveSavedModes(_ modes: [SavedMode]) {
+        let sorted = modes.sorted { lhs, rhs in
+            if lhs.slot == rhs.slot {
+                return lhs.updatedAt > rhs.updatedAt
+            }
+            return lhs.slot < rhs.slot
+        }
+        guard let data = try? JSONEncoder().encode(sorted) else { return }
+        defaults.set(data, forKey: savedModesKey)
     }
 
     private func migrateLegacyValuesIfNeeded() {
