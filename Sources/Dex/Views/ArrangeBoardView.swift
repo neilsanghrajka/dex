@@ -1757,11 +1757,11 @@ private struct ActiveModeChip: View {
     @State private var isHovered = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        HStack(spacing: 10) {
             HStack(spacing: -6) {
                 ForEach(Array(mode.windowBindings.prefix(4).enumerated()), id: \.offset) { _, binding in
                     modeIcon(for: binding)
-                        .frame(width: 24, height: 24)
+                        .frame(width: 22, height: 22)
                         .padding(4)
                         .background(.white.opacity(0.96), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                         .overlay {
@@ -1769,22 +1769,19 @@ private struct ActiveModeChip: View {
                                 .strokeBorder(.black.opacity(0.08), lineWidth: 1)
                         }
                 }
-                Spacer()
-                Text("\(mode.windowBindings.count)")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.white.opacity(0.74))
             }
+            .frame(height: 30, alignment: .leading)
 
             Text(mode.modeName)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.white)
                 .lineLimit(1)
-            Text(mode.shortcutLabel)
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.white.opacity(0.58))
+                .truncationMode(.tail)
+
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.vertical, 10)
         .background(.white.opacity(isSelected ? 0.16 : (isHovered ? 0.08 : 0.035)), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
