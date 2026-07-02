@@ -10,8 +10,8 @@ struct DexApp: App {
         WindowGroup("Dex", id: "main") {
             ContentView()
                 .environmentObject(model)
-                .frame(width: 560)
-                .frame(minHeight: 620, idealHeight: 780, maxHeight: .infinity)
+                .frame(minWidth: 700, idealWidth: 760, maxWidth: .infinity)
+                .frame(minHeight: 560, idealHeight: 700, maxHeight: .infinity)
                 .onAppear {
                     appDelegate.configure(model: model)
                 }

@@ -4,6 +4,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.openWindow) private var openWindow
+    @State private var selectedSection: DexHomeSection? = .general
 
     var body: some View {
         Group {
@@ -20,31 +21,16 @@ struct ContentView: View {
     }
 
     private var mainContent: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 14) {
-                AppHeader()
-
-                PermissionPanel()
-                    .frame(maxWidth: 460)
-
-                DexActionsPanel()
-                    .environmentObject(model)
-
-                if !model.savedModes.isEmpty {
-                    ModeManagementPanel()
-                        .environmentObject(model)
+        NavigationSplitView {
+            List(selection: $selectedSection) {
+                ForEach(DexHomeSection.allCases) { section in
+                    Label(section.title, systemImage: section.systemImage)
+                        .tag(section)
                 }
-
-                AppShortcutSettingsView()
-                    .environmentObject(model)
-
-                NewWindowLaunchSettingsView()
-                    .environmentObject(model)
-
-                PreferencesPanel()
-                    .environmentObject(model)
             }
-            .padding(28)
+            .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 220)
+        } detail: {
+            detailContent
         }
         .overlay(alignment: .bottom) {
             if let hudText = model.hudText {
@@ -59,49 +45,203 @@ struct ContentView: View {
             }
         }
     }
+
+    @ViewBuilder
+    private var detailContent: some View {
+        switch selectedSection ?? .general {
+        case .general:
+            GeneralPane()
+                .environmentObject(model)
+        case .shortcuts:
+            ShortcutsPane()
+                .environmentObject(model)
+        case .preferences:
+            PreferencesPane()
+                .environmentObject(model)
+        }
+    }
 }
 
-private struct AppHeader: View {
+private enum DexHomeSection: String, CaseIterable, Identifiable {
+    case general
+    case shortcuts
+    case preferences
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .general: "General"
+        case .shortcuts: "Shortcuts"
+        case .preferences: "Preferences"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .general: "rectangle.3.group"
+        case .shortcuts: "keyboard"
+        case .preferences: "gearshape"
+        }
+    }
+}
+
+// MARK: - General
+
+private struct GeneralPane: View {
+    @EnvironmentObject private var model: AppModel
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 14) {
+        Form {
+            heroSection
+
+            PermissionsSection()
+
+            boardSection
+
+            if !model.savedModes.isEmpty {
+                modesSection
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("General")
+    }
+
+    private var heroSection: some View {
+        Section {
+            VStack(spacing: 8) {
                 if let logo = BrandAssets.logoImage() {
                     Image(nsImage: logo)
                         .resizable()
                         .scaledToFit()
-                        .frame(width: 58, height: 58)
-                        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                        .frame(width: 64, height: 64)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 } else {
                     Image(systemName: "rectangle.split.3x1")
-                        .font(.system(size: 32, weight: .semibold))
-                        .frame(width: 58, height: 58)
+                        .font(.system(size: 36, weight: .semibold))
+                        .frame(width: 64, height: 64)
                 }
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Dex")
-                        .font(.largeTitle.weight(.semibold))
-                    Text("Arrange your current desktop into passive left, main center, and passive right.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
+                Text("Dex")
+                    .font(.title.weight(.semibold))
 
-            HStack(spacing: 8) {
-                KeyCap("⌥")
-                KeyCap("⌥")
-                Text("Double-press Option anywhere to open the board.")
-                    .font(.caption)
+                Text("Arrange your current desktop into passive left, main center, and passive right.")
+                    .font(.callout)
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(spacing: 6) {
+                    KeyCap("⌥")
+                    KeyCap("⌥")
+                    Text("Double-press Option anywhere to open the board.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 2)
             }
-            .padding(.leading, 2)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
         }
-        .frame(maxWidth: 460, alignment: .leading)
-        .padding(.bottom, 4)
+        .listRowBackground(Color.clear)
+    }
+
+    private var boardSection: some View {
+        Section {
+            LabeledContent("Arrange the current desktop") {
+                HStack(spacing: 8) {
+                    Button("Arrange Now") {
+                        Task { await model.arrangeNow() }
+                    }
+                    Button("Open Board") {
+                        Task { await model.showArrangeBoard() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+
+            Toggle("Arrange all displays", isOn: $model.arrangeAllDisplays)
+                .toggleStyle(.switch)
+        } header: {
+            Text("Board")
+        } footer: {
+            Text("When off, double Option opens the board for the active display only. When on, each display gets its own three-column board.")
+        }
+    }
+
+    private var modesSection: some View {
+        Section {
+            ForEach(model.savedModes) { mode in
+                ModeManagementRow(mode: mode)
+                    .environmentObject(model)
+            }
+        } header: {
+            Text("Modes")
+        } footer: {
+            Text("Saved modes reopen a remembered set of apps and place them back into the three board columns. Press Option and the mode's number to launch it from anywhere.")
+        }
     }
 }
 
-private struct KeyCap: View {
+// MARK: - Shortcuts
+
+private struct ShortcutsPane: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        Form {
+            AppShortcutSettingsView()
+                .environmentObject(model)
+
+            NewWindowLaunchSettingsView()
+                .environmentObject(model)
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Shortcuts")
+    }
+}
+
+// MARK: - Preferences
+
+private struct PreferencesPane: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Show shortcut legend on the board", isOn: $model.showsBoardLegend)
+                    .toggleStyle(.switch)
+            } header: {
+                Text("Guidance")
+            } footer: {
+                Text("Shows a one-line key legend along the bottom of the board for your first few sessions.")
+            }
+
+            Section {
+                LabeledContent("Welcome flow") {
+                    Button("Replay Onboarding") {
+                        model.replayOnboarding()
+                    }
+                }
+                LabeledContent("Guided board walkthrough") {
+                    Button("Replay Board Tour") {
+                        Task { await model.replayTour() }
+                    }
+                }
+            } header: {
+                Text("Onboarding")
+            } footer: {
+                Text("Onboarding runs the full welcome flow — granted permissions stay granted. The board tour jumps straight into the guided walkthrough.")
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Preferences")
+    }
+}
+
+// MARK: - Shared pieces
+
+struct KeyCap: View {
     let symbol: String
 
     init(_ symbol: String) {
@@ -117,110 +257,6 @@ private struct KeyCap: View {
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .strokeBorder(.secondary.opacity(0.25), lineWidth: 1)
             }
-    }
-}
-
-private struct PreferencesPanel: View {
-    @EnvironmentObject private var model: AppModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Preferences", systemImage: "gearshape")
-                .font(.headline.weight(.semibold))
-
-            Toggle("Show shortcut legend on the board", isOn: $model.showsBoardLegend)
-                .toggleStyle(.switch)
-
-            Divider()
-                .opacity(0.35)
-
-            HStack(spacing: 10) {
-                Button("Replay Onboarding") {
-                    model.replayOnboarding()
-                }
-                Button("Replay Board Tour") {
-                    Task { await model.replayTour() }
-                }
-            }
-
-            Text("Onboarding runs the full welcome flow — granted permissions stay granted. The board tour jumps straight into the guided walkthrough.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: 460, alignment: .leading)
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-}
-
-private struct ModeManagementPanel: View {
-    @EnvironmentObject private var model: AppModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Label("Modes", systemImage: "square.grid.3x1.below.line.grid.1x2")
-                    .font(.headline.weight(.semibold))
-                Spacer()
-                Text("\(model.savedModes.count)")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.secondary.opacity(0.10), in: Capsule())
-            }
-
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(model.savedModes) { mode in
-                    ModeManagementRow(mode: mode)
-                        .environmentObject(model)
-                    if mode.id != model.savedModes.last?.id {
-                        Divider()
-                            .opacity(0.35)
-                            .padding(.leading, 106)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(maxWidth: 460, alignment: .leading)
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-}
-
-private struct DexActionsPanel: View {
-    @EnvironmentObject private var model: AppModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Actions", systemImage: "slider.horizontal.3")
-                .font(.headline.weight(.semibold))
-
-            HStack(spacing: 12) {
-                Button {
-                    Task { await model.showArrangeBoard() }
-                } label: {
-                    Label("Arrange Board", systemImage: "rectangle.3.group")
-                }
-                .buttonStyle(.borderedProminent)
-
-                Button {
-                    Task { await model.arrangeNow() }
-                } label: {
-                    Label("Arrange Now", systemImage: "sparkles")
-                }
-
-                Toggle("Arrange all displays", isOn: $model.arrangeAllDisplays)
-                    .toggleStyle(.switch)
-                    .fixedSize()
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(maxWidth: 460, alignment: .leading)
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
@@ -244,12 +280,12 @@ private struct ModeManagementRow: View {
             if isEditing {
                 TextField("Mode name", text: $draftName)
                     .textFieldStyle(.plain)
-                    .font(.headline)
+                    .font(.body.weight(.medium))
                     .focused($isNameFocused)
                     .onSubmit(commitRename)
             } else {
                 Text(mode.name)
-                    .font(.headline)
+                    .font(.body.weight(.medium))
                     .lineLimit(1)
             }
 
@@ -259,6 +295,8 @@ private struct ModeManagementRow: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(.secondary.opacity(0.10), in: Capsule())
+
+            Spacer()
 
             if isEditing {
                 Button(action: commitRename) {
@@ -293,9 +331,7 @@ private struct ModeManagementRow: View {
             .buttonStyle(.borderless)
             .help("Delete mode")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 2)
         .onChange(of: mode.name) {
             draftName = mode.name
             isEditing = false

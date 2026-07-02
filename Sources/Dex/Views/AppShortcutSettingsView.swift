@@ -1,9 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// App-launch shortcut editor card: a table of bindings with a press-to-record key
-/// badge, remove buttons, and an "Add App…" picker. Reads/writes the live binding
-/// list on `AppModel`. Lives on the main Dex window.
+/// Grouped-form "Launch Keys" section: a table of app-launch bindings with a
+/// press-to-record key badge, remove buttons, and an "Add App…" picker.
+/// Reads/writes the live binding list on `AppModel`. Embed inside a `Form`.
 struct AppShortcutSettingsView: View {
     @EnvironmentObject private var model: AppModel
 
@@ -12,30 +12,10 @@ struct AppShortcutSettingsView: View {
     @State private var isPickerPresented = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Label("Shortcuts", systemImage: "keyboard")
-                    .font(.headline.weight(.semibold))
-                Spacer()
-                Text("\(model.appShortcutBindings.count)")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.secondary.opacity(0.10), in: Capsule())
+        Section {
+            ForEach(model.appShortcutBindings) { binding in
+                row(for: binding)
             }
-
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(model.appShortcutBindings) { binding in
-                    row(for: binding)
-                    if binding.id != model.appShortcutBindings.last?.id {
-                        Divider()
-                            .opacity(0.35)
-                            .padding(.leading, 34)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack {
                 Button {
@@ -51,23 +31,19 @@ struct AppShortcutSettingsView: View {
                 }
                 .buttonStyle(.link)
             }
-
-            Text("Press a key while the Arrange Board is open to launch that app in the focused column. One letter or number per app. Reserved: Q closes/quits, / opens the palette.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: 460, alignment: .leading)
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .sheet(isPresented: $isPickerPresented) {
-            AppShortcutPicker { application in
-                isPickerPresented = false
-                model.addAppShortcutBinding(for: application)
-            } onCancel: {
-                isPickerPresented = false
+            .sheet(isPresented: $isPickerPresented) {
+                AppShortcutPicker { application in
+                    isPickerPresented = false
+                    model.addAppShortcutBinding(for: application)
+                } onCancel: {
+                    isPickerPresented = false
+                }
+                .environmentObject(model)
             }
-            .environmentObject(model)
+        } header: {
+            Text("Launch Keys")
+        } footer: {
+            Text("Press a key while the board is open to launch that app in the focused column. Click a key badge and press a new letter or number to rebind. Reserved keys stay fixed: Q closes or quits, and / opens search.")
         }
     }
 
@@ -100,7 +76,7 @@ struct AppShortcutSettingsView: View {
                 feedbackView(feedback, for: binding)
             }
         }
-        .padding(.vertical, 7)
+        .padding(.vertical, 2)
     }
 
     @ViewBuilder

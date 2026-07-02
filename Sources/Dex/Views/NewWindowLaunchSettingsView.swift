@@ -1,77 +1,47 @@
 import SwiftUI
 
+/// Grouped-form "Open New Windows" section. Embed inside a `Form`.
 struct NewWindowLaunchSettingsView: View {
     @EnvironmentObject private var model: AppModel
 
     @State private var isPickerPresented = false
-    @State private var isExpanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            DisclosureGroup(isExpanded: $isExpanded) {
-                VStack(alignment: .leading, spacing: 10) {
-                    if model.newWindowLaunchRules.isEmpty {
-                        Text("No apps selected.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .padding(.top, 8)
-                    } else {
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(model.newWindowLaunchRules) { rule in
-                                row(for: rule)
-                                if rule.id != model.newWindowLaunchRules.last?.id {
-                                    Divider()
-                                        .opacity(0.35)
-                                        .padding(.leading, 34)
-                                }
-                            }
-                        }
-                        .padding(.top, 6)
-                    }
-
-                    HStack {
-                        Button {
-                            isPickerPresented = true
-                        } label: {
-                            Label("Add App…", systemImage: "plus")
-                        }
-                        Spacer()
-                        Button("Restore Defaults") {
-                            model.resetNewWindowLaunchRulesToDefaults()
-                        }
-                        .buttonStyle(.link)
-                    }
-
-                    Text("Dex tries to create a fresh app window when the app supports it, then falls back to normal launch or activation.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            } label: {
-                HStack(spacing: 10) {
-                    Label("Open New Windows", systemImage: "macwindow.badge.plus")
-                        .font(.headline.weight(.semibold))
-                    Spacer()
-                    Text("\(model.newWindowLaunchRules.count)")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(.secondary.opacity(0.10), in: Capsule())
+        Section {
+            if model.newWindowLaunchRules.isEmpty {
+                Text("No apps selected.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(model.newWindowLaunchRules) { rule in
+                    row(for: rule)
                 }
             }
-        }
-        .frame(maxWidth: 460, alignment: .leading)
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .sheet(isPresented: $isPickerPresented) {
-            NewWindowLaunchRulePicker { application in
-                isPickerPresented = false
-                model.addNewWindowLaunchRule(for: application)
-            } onCancel: {
-                isPickerPresented = false
+
+            HStack {
+                Button {
+                    isPickerPresented = true
+                } label: {
+                    Label("Add App…", systemImage: "plus")
+                }
+                Spacer()
+                Button("Restore Defaults") {
+                    model.resetNewWindowLaunchRulesToDefaults()
+                }
+                .buttonStyle(.link)
             }
-            .environmentObject(model)
+            .sheet(isPresented: $isPickerPresented) {
+                NewWindowLaunchRulePicker { application in
+                    isPickerPresented = false
+                    model.addNewWindowLaunchRule(for: application)
+                } onCancel: {
+                    isPickerPresented = false
+                }
+                .environmentObject(model)
+            }
+        } header: {
+            Text("Open New Windows")
+        } footer: {
+            Text("Use this for apps like browsers and terminals where choosing the app should create a new work surface instead of jumping to an existing window on another display. Dex tries the app's New Window command first, then falls back to opening or activating the app.")
         }
     }
 
@@ -94,7 +64,7 @@ struct NewWindowLaunchSettingsView: View {
             .buttonStyle(.borderless)
             .help("Remove \(rule.displayName)")
         }
-        .padding(.vertical, 7)
+        .padding(.vertical, 2)
     }
 
     @ViewBuilder

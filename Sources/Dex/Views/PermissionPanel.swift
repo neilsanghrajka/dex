@@ -1,6 +1,9 @@
 import SwiftUI
 
-struct PermissionPanel: View {
+/// Grouped-form "Permissions" section for the main window. Collapses to a single
+/// status row once everything is granted; expands to per-permission rows with
+/// Allow buttons otherwise.
+struct PermissionsSection: View {
     @EnvironmentObject private var model: AppModel
     @State private var showsDetails = false
 
@@ -11,105 +14,121 @@ struct PermissionPanel: View {
     }
 
     var body: some View {
-        VStack(spacing: 10) {
+        Section {
             if allGranted && !showsDetails {
-                compactRow
-            } else {
-                fullRows
-            }
-        }
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .animation(.easeInOut(duration: 0.15), value: allGranted)
-        .animation(.easeInOut(duration: 0.15), value: showsDetails)
-    }
-
-    private var compactRow: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-                .font(.title3)
-
-            Text("All permissions granted")
-                .font(.headline)
-
-            Spacer()
-
-            Button("Details") {
-                showsDetails = true
-            }
-            .buttonStyle(.borderless)
-        }
-    }
-
-    private var fullRows: some View {
-        VStack(spacing: 10) {
-            PermissionRow(
-                title: "Accessibility",
-                detail: "Move, resize, and focus app windows.",
-                granted: model.permissions.isAccessibilityTrusted,
-                action: model.requestAccessibility
-            )
-            PermissionRow(
-                title: "Input Monitoring",
-                detail: "Detect double Option, Option-scroll, Option-arrow cycling, and Control-drag. If Dex is not listed, press + and choose /Applications/Dex.app.",
-                granted: model.permissions.isInputMonitoringTrusted,
-                action: model.requestInputMonitoring
-            )
-            PermissionRow(
-                title: "Screen Recording",
-                detail: "Show real window thumbnails. Return to Dex after granting; relaunch if macOS asks.",
-                granted: model.permissions.isScreenRecordingTrusted,
-                action: model.requestScreenRecording
-            )
-
-            HStack(spacing: 16) {
-                Button {
-                    model.refreshPermissions()
-                } label: {
-                    Label("Recheck Permissions", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-
-                if allGranted {
-                    Button("Hide Details") {
-                        showsDetails = false
+                HStack(spacing: 12) {
+                    PermissionIconTile(systemImage: "checkmark", color: .green)
+                    Text("All permissions granted")
+                    Spacer()
+                    Button("Details") {
+                        showsDetails = true
                     }
                     .buttonStyle(.borderless)
                 }
+            } else {
+                Group {
+                    PermissionRow(
+                        title: "Accessibility",
+                        detail: "Move, resize, and focus app windows.",
+                        systemImage: "accessibility",
+                        color: .blue,
+                        granted: model.permissions.isAccessibilityTrusted,
+                        action: model.requestAccessibility
+                    )
+                    PermissionRow(
+                        title: "Input Monitoring",
+                        detail: "Detect double Option, Option-scroll, Option-arrow cycling, and Control-drag. If Dex is not listed, press + and choose /Applications/Dex.app.",
+                        systemImage: "keyboard",
+                        color: .purple,
+                        granted: model.permissions.isInputMonitoringTrusted,
+                        action: model.requestInputMonitoring
+                    )
+                    PermissionRow(
+                        title: "Screen Recording",
+                        detail: "Show real window thumbnails. Return to Dex after granting; relaunch if macOS asks.",
+                        systemImage: "rectangle.dashed.badge.record",
+                        color: .orange,
+                        granted: model.permissions.isScreenRecordingTrusted,
+                        action: model.requestScreenRecording
+                    )
+                }
+                .id(model.permissionRefreshID)
             }
-            .padding(.top, 2)
+        } header: {
+            HStack {
+                Text("Permissions")
+                Spacer()
+                if !allGranted || showsDetails {
+                    Button("Recheck") {
+                        model.refreshPermissions()
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.subheadline)
+
+                    if allGranted {
+                        Button("Hide Details") {
+                            showsDetails = false
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.subheadline)
+                    }
+                }
+            }
         }
-        .id(model.permissionRefreshID)
+        .animation(.easeInOut(duration: 0.15), value: allGranted)
+        .animation(.easeInOut(duration: 0.15), value: showsDetails)
     }
 }
 
 private struct PermissionRow: View {
     let title: String
     let detail: String
+    let systemImage: String
+    let color: Color
     let granted: Bool
     let action: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: granted ? "checkmark.circle.fill" : "exclamationmark.circle")
-                .foregroundStyle(granted ? .green : .orange)
-                .font(.title3)
+            PermissionIconTile(systemImage: systemImage, color: color)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.headline)
                 Text(detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer()
 
-            Button(granted ? "Granted" : "Allow") {
-                action()
+            if granted {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .font(.title3)
+                    .accessibilityLabel("\(title) granted")
+            } else {
+                Button("Allow…") {
+                    action()
+                }
             }
-            .disabled(granted)
         }
+        .padding(.vertical, 2)
+    }
+}
+
+private struct PermissionIconTile: View {
+    let systemImage: String
+    let color: Color
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 26, height: 26)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(color.gradient)
+            )
     }
 }
