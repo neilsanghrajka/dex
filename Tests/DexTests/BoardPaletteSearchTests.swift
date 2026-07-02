@@ -59,6 +59,7 @@ final class BoardPaletteSearchTests: XCTestCase {
         let result = BoardPaletteResult.savedMode(mode)
 
         XCTAssertEqual(BoardPaletteSearch.filtered([result], query: "m"), [result])
+        XCTAssertEqual(BoardPaletteSearch.filtered([result], query: "meeting group"), [result])
         XCTAssertEqual(BoardPaletteSearch.filtered([result], query: "meeting mode"), [result])
     }
 
@@ -75,10 +76,14 @@ final class BoardPaletteSearchTests: XCTestCase {
     func testManageModesMatchesModeSettingsQueries() {
         let result = BoardPaletteResult.manageModes
 
+        XCTAssertEqual(BoardPaletteSearch.filtered([result], query: "group"), [result])
+        XCTAssertEqual(BoardPaletteSearch.filtered([result], query: "rename group"), [result])
+        XCTAssertEqual(BoardPaletteSearch.filtered([result], query: "delete group"), [result])
+        // Legacy vocabulary keeps matching so muscle memory doesn't break.
         XCTAssertEqual(BoardPaletteSearch.filtered([result], query: "mode"), [result])
         XCTAssertEqual(BoardPaletteSearch.filtered([result], query: "rename mode"), [result])
         XCTAssertEqual(BoardPaletteSearch.filtered([result], query: "delete mode"), [result])
-        XCTAssertEqual(result.title, "Manage Modes")
+        XCTAssertEqual(result.title, "Manage Groups")
         XCTAssertTrue(result.isModeManagementAction)
         XCTAssertFalse(result.isSavedMode)
     }

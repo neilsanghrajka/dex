@@ -1808,7 +1808,7 @@ private struct ActiveModeStrip: View {
                 .allowsHitTesting(false)
 
             HStack(spacing: 14) {
-                Label("Active Modes", systemImage: "square.grid.3x1.below.line.grid.1x2")
+                Label("Active Groups", systemImage: "square.grid.3x1.below.line.grid.1x2")
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.white.opacity(0.86))
                     .frame(width: labelWidth, alignment: .leading)
@@ -2374,7 +2374,7 @@ private struct SaveModeOverlay: View {
             VStack(alignment: .leading, spacing: 18) {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Save Mode")
+                        Text("Save Group")
                             .font(.title3.weight(.semibold))
                             .foregroundStyle(.white)
                         Text("Capture the assigned windows on this desktop.")
@@ -2392,7 +2392,7 @@ private struct SaveModeOverlay: View {
 
                 ModeNameTextField(
                     text: $name,
-                    placeholder: "Mode name",
+                    placeholder: "Group name",
                     onSubmit: {
                         selectedModeIndex >= 0 ? onReplace() : onSaveNew()
                     },
@@ -2412,7 +2412,7 @@ private struct SaveModeOverlay: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     SaveModeChoiceRow(
-                        title: "Save as new mode",
+                        title: "Save as new group",
                         detail: "Return",
                         windows: capturedWindows,
                         isSelected: selectedModeIndex < 0,
@@ -3018,7 +3018,7 @@ private struct BoardPaletteResultRow: View {
             }
 
             if result.isSavedMode {
-                Text("Mode")
+                Text("Group")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.white.opacity(0.7))
                     .padding(.horizontal, 7)
@@ -3393,7 +3393,7 @@ private struct TourCoachCard: View {
         case .shortcut:
             return "Each key opens (or moves) its app straight into the focused column."
         case .closing:
-            return "/ opens the palette · ⌥S saves this layout as a Mode · ⌥1–9 recalls Modes · Q closes things · Esc leaves"
+            return "/ opens the palette · ⌥S saves this layout as a Group · ⌥1–9 recalls Groups · Q closes things · Esc leaves"
         }
     }
 }
@@ -3406,8 +3406,8 @@ private struct BoardLegendBar: View {
     var body: some View {
         HStack(spacing: 14) {
             legendItem("/", "Palette")
-            legendItem("⌥S", "Save Mode")
-            legendItem("⌥1–9", "Modes")
+            legendItem("⌥S", "Save Group")
+            legendItem("⌥1–9", "Groups")
             legendItem("Q", "Close")
             legendItem("Esc", "Leave")
 

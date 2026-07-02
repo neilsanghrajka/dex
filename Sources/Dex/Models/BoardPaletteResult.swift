@@ -31,7 +31,7 @@ enum BoardPaletteResult: Identifiable, Equatable {
     var title: String {
         switch self {
         case .manageModes:
-            "Manage Modes"
+            "Manage Groups"
         case .savedMode(let mode):
             mode.name
         case .application(let application):
@@ -44,7 +44,7 @@ enum BoardPaletteResult: Identifiable, Equatable {
     var subtitle: String {
         switch self {
         case .manageModes:
-            "Rename or delete saved modes"
+            "Rename or delete saved groups"
         case .savedMode(let mode):
             "\(mode.windows.count) windows"
         case .application(let application):
@@ -88,12 +88,12 @@ enum BoardPaletteResult: Identifiable, Equatable {
         case .manageModes:
             return tokenizedMatch(
                 query: normalized,
-                corpus: "mode modes manage modes settings saved mode rename mode delete mode edit mode"
+                corpus: "group groups manage groups settings saved group rename group delete group edit group mode modes manage modes saved mode rename mode delete mode edit mode"
             )
         case .savedMode(let mode):
             return tokenizedMatch(
                 query: normalized,
-                corpus: "\(mode.name) mode saved mode \(mode.shortcutLabel) option \(mode.slot)"
+                corpus: "\(mode.name) group saved group mode saved mode \(mode.shortcutLabel) option \(mode.slot)"
             )
         case .application(let application):
             return application.name.localizedCaseInsensitiveContains(normalized) ||

@@ -35,21 +35,27 @@ final class AccessibilityWindowService {
         AXUIElementPerformAction(window.axElement, kAXRaiseAction as CFString)
     }
 
-    func close(_ window: ManagedWindow) {
-        if let closeButton = copyAttribute(window.axElement, kAXCloseButtonAttribute) as! AXUIElement?,
-           AXUIElementPerformAction(closeButton, kAXPressAction as CFString) == .success {
-            return
-        }
-
-        if let app = NSRunningApplication(processIdentifier: window.pid) {
-            app.terminate()
-        }
-    }
-
     func closeWindowOnly(_ window: ManagedWindow) {
         if let closeButton = copyAttribute(window.axElement, kAXCloseButtonAttribute) as! AXUIElement? {
             AXUIElementPerformAction(closeButton, kAXPressAction as CFString)
         }
+    }
+
+    /// Counts the app's standard windows across all spaces. AX enumeration is not
+    /// limited to the current space, unlike the CG on-screen list used for the board,
+    /// so windows parked on other desktops are included. Minimized windows count too —
+    /// quitting the app would destroy them. Returns nil when the AX read fails.
+    func appWindowCount(pid: pid_t) -> Int? {
+        let appElement = AXUIElementCreateApplication(pid)
+        guard let rawWindows = copyAttribute(appElement, kAXWindowsAttribute) as? [AXUIElement] else {
+            return nil
+        }
+        return rawWindows.filter { element in
+            guard copyAttribute(element, kAXRoleAttribute) as? String == kAXWindowRole as String else {
+                return false
+            }
+            return copyAttribute(element, kAXSubroleAttribute) as? String != kAXSystemDialogSubrole as String
+        }.count
     }
 
     func pressNewWindowMenuItem(

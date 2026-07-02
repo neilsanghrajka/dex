@@ -176,9 +176,9 @@ private struct GeneralPane: View {
                     .environmentObject(model)
             }
         } header: {
-            Text("Modes")
+            Text("Groups")
         } footer: {
-            Text("Saved modes reopen a remembered set of apps and place them back into the three board columns. Press Option and the mode's number to launch it from anywhere.")
+            Text("Saved groups reopen a remembered set of apps and place them back into the three board columns. Press Option and the group's number to launch it from anywhere.")
         }
     }
 }
@@ -278,7 +278,7 @@ private struct ModeManagementRow: View {
                 .frame(width: 94, height: 30, alignment: .leading)
 
             if isEditing {
-                TextField("Mode name", text: $draftName)
+                TextField("Group name", text: $draftName)
                     .textFieldStyle(.plain)
                     .font(.body.weight(.medium))
                     .focused($isNameFocused)
@@ -319,7 +319,7 @@ private struct ModeManagementRow: View {
                         .font(.system(size: 12, weight: .semibold))
                 }
                 .buttonStyle(.borderless)
-                .help("Rename mode")
+                .help("Rename group")
             }
 
             Button(role: .destructive) {
@@ -329,7 +329,7 @@ private struct ModeManagementRow: View {
                     .font(.system(size: 12, weight: .semibold))
             }
             .buttonStyle(.borderless)
-            .help("Delete mode")
+            .help("Delete group")
         }
         .padding(.vertical, 2)
         .onChange(of: mode.name) {

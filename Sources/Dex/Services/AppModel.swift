@@ -245,14 +245,14 @@ final class AppModel: ObservableObject {
     @discardableResult
     func saveMode(name rawName: String, replacing existingID: UUID?, displayID: String) -> SavedMode? {
         let cleanedName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let name = cleanedName.isEmpty ? "Mode \(savedModes.count + 1)" : cleanedName
+        let name = cleanedName.isEmpty ? "Group \(savedModes.count + 1)" : cleanedName
         let captured = capturedModeWindows(displayID: displayID)
         let windows = ColumnRole.allCases.flatMap { role in
             captured[role, default: []]
         }
 
         guard !windows.isEmpty else {
-            showHUD("Assign windows before saving a mode")
+            showHUD("Assign windows before saving a group")
             return nil
         }
 
@@ -294,11 +294,11 @@ final class AppModel: ObservableObject {
     func renameMode(id: UUID, to rawName: String) {
         let cleanedName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanedName.isEmpty else {
-            showHUD("Mode name cannot be empty")
+            showHUD("Group name cannot be empty")
             return
         }
         guard let index = savedModes.firstIndex(where: { $0.id == id }) else {
-            showHUD("Mode not found")
+            showHUD("Group not found")
             return
         }
 
@@ -313,12 +313,12 @@ final class AppModel: ObservableObject {
             updated.modeName = cleanedName
             return updated
         }
-        showHUD("Renamed mode")
+        showHUD("Renamed group")
     }
 
     func deleteMode(id: UUID) {
         guard let mode = savedModes.first(where: { $0.id == id }) else {
-            showHUD("Mode not found")
+            showHUD("Group not found")
             return
         }
         savedModes.removeAll { $0.id == id }
@@ -331,7 +331,7 @@ final class AppModel: ObservableObject {
     func openModeManagement() {
         closeArrangeBoard()
         NSApp.activate(ignoringOtherApps: true)
-        showHUD("Manage modes in Dex")
+        showHUD("Manage groups in Dex")
     }
 
     func mode(forSlot slot: Int) -> SavedMode? {
@@ -340,7 +340,7 @@ final class AppModel: ObservableObject {
 
     func handleModeHotkey(slot: Int) async {
         guard let mode = mode(forSlot: slot) else {
-            showHUD("No mode saved for Option+\(slot)")
+            showHUD("No group saved for Option+\(slot)")
             return
         }
         await confirmOrLaunchMode(mode, policy: selectedLaunchPolicy())
@@ -348,7 +348,7 @@ final class AppModel: ObservableObject {
 
     func prepareModeLaunch(slot: Int) {
         guard let mode = mode(forSlot: slot) else {
-            showHUD("No mode saved for Option+\(slot)")
+            showHUD("No group saved for Option+\(slot)")
             return
         }
         modeLaunchConfirmation = .confirming(
@@ -388,7 +388,7 @@ final class AppModel: ObservableObject {
     func raiseModeInstance(id: UUID) async {
         await refreshWindows(includeThumbnails: false)
         guard let instance = activeModeInstances.first(where: { $0.id == id }) else {
-            showHUD("Mode is no longer active")
+            showHUD("Group is no longer active")
             return
         }
         let liveWindows = instance.windowBindings.compactMap { binding in
@@ -396,7 +396,7 @@ final class AppModel: ObservableObject {
         }
         guard !liveWindows.isEmpty else {
             removeActiveModeInstance(id: id)
-            showHUD("Mode windows are gone")
+            showHUD("Group windows are gone")
             return
         }
 
@@ -524,13 +524,17 @@ final class AppModel: ObservableObject {
             showHUD("Window not found")
             return
         }
-        let visibleAppWindowCount = windows.filter { $0.pid == window.pid }.count
-        if visibleAppWindowCount <= 1,
+        let action = WindowCloseAction.decide(
+            allowsMultipleWindows: newWindowLaunchRules.contains { $0.matches(window) },
+            crossSpaceWindowCount: accessibility.appWindowCount(pid: window.pid),
+            visibleWindowCount: windows.filter { $0.pid == window.pid }.count
+        )
+        if action == .quitApp,
            let app = NSRunningApplication(processIdentifier: window.pid) {
             app.terminate()
             showHUD("Quit \(window.appName)")
         } else {
-            accessibility.close(window)
+            accessibility.closeWindowOnly(window)
             showHUD("Closed \(window.displayTitle)")
         }
         removeWindowFromAllStacks(windowID)
@@ -579,7 +583,7 @@ final class AppModel: ObservableObject {
             if haystack.contains("whatsapp") || haystack.contains("superhuman") {
                 NSRunningApplication(processIdentifier: window.pid)?.terminate()
             } else {
-                accessibility.close(window)
+                accessibility.closeWindowOnly(window)
             }
             removeWindowFromAllStacks(window.id)
         }
