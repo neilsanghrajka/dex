@@ -72,6 +72,17 @@ final class BoardPaletteSearchTests: XCTestCase {
         XCTAssertFalse(result.isDiaTab)
     }
 
+    func testManageModesMatchesModeSettingsQueries() {
+        let result = BoardPaletteResult.manageModes
+
+        XCTAssertEqual(BoardPaletteSearch.filtered([result], query: "mode"), [result])
+        XCTAssertEqual(BoardPaletteSearch.filtered([result], query: "rename mode"), [result])
+        XCTAssertEqual(BoardPaletteSearch.filtered([result], query: "delete mode"), [result])
+        XCTAssertEqual(result.title, "Manage Modes")
+        XCTAssertTrue(result.isModeManagementAction)
+        XCTAssertFalse(result.isSavedMode)
+    }
+
     private func sampleApplication(
         name: String,
         bundleIdentifier: String?

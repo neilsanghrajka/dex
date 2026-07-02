@@ -126,6 +126,7 @@ private enum BoardSelection: Equatable {
 
 struct ArrangeBoardView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.openWindow) private var openWindow
     let display: DisplayInfo
     @State private var hoveredRole: ColumnRole?
     @State private var draggedWindowID: String?
@@ -156,6 +157,7 @@ struct ArrangeBoardView: View {
             let centerStackHeight = metrics.centerStackHeight
             let unassignedWindows = model.unassignedWindows(on: display)
             let runningApps = model.runningApplicationsWithoutVisibleWindows(on: display)
+            let ownsBoardInput = model.isDisplayActive(display)
             let bottomSplit = bottomShelfSplit(
                 totalWidth: display.localRect(for: display.grid.rect(for: .center)).width,
                 gutter: boardGutter,
@@ -329,7 +331,7 @@ struct ArrangeBoardView: View {
             }
             .contentShape(Rectangle())
             .overlay {
-                if !isPaletteVisible && !isCleanupVisible && !isSaveModeVisible {
+                if ownsBoardInput && !isPaletteVisible && !isCleanupVisible && !isSaveModeVisible {
                     BoardKeyboardCapture { event in
                         handleKeyDown(event)
                     }
@@ -338,7 +340,7 @@ struct ArrangeBoardView: View {
                 }
             }
             .overlay {
-                if isPaletteVisible {
+                if ownsBoardInput && isPaletteVisible {
                     BoardPaletteOverlay(
                         query: $paletteQuery,
                         results: filteredPaletteResults,
@@ -354,7 +356,7 @@ struct ArrangeBoardView: View {
                 }
             }
             .overlay {
-                if isCleanupVisible {
+                if ownsBoardInput && isCleanupVisible {
                     CleanupOverlay(
                         candidates: cleanupCandidates,
                         selectedIDs: $selectedCleanupIDs,
@@ -366,7 +368,7 @@ struct ArrangeBoardView: View {
                 }
             }
             .overlay {
-                if isSaveModeVisible {
+                if ownsBoardInput && isSaveModeVisible {
                     SaveModeOverlay(
                         name: $saveModeName,
                         modes: model.savedModes,
@@ -444,7 +446,8 @@ struct ArrangeBoardView: View {
     }
 
     private var paletteResults: [BoardPaletteResult] {
-        model.savedModes.map(BoardPaletteResult.savedMode) +
+        (model.savedModes.isEmpty ? [] : [.manageModes]) +
+            model.savedModes.map(BoardPaletteResult.savedMode) +
             diaTabPaletteResults() +
             paletteApplications.map(BoardPaletteResult.application)
     }
@@ -1186,6 +1189,10 @@ struct ArrangeBoardView: View {
         let index = min(paletteSelectionIndex, results.count - 1)
 
         switch results[index] {
+        case .manageModes:
+            closePalette()
+            openWindow(id: "main")
+            model.openModeManagement()
         case .savedMode(let mode):
             closePalette()
             Task {
@@ -2175,9 +2182,11 @@ private struct ModeNameTextField: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
     let onSubmit: () -> Void
+    let onCancel: () -> Void
+    let onMove: (Int) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, onSubmit: onSubmit)
+        Coordinator(text: $text, onSubmit: onSubmit, onCancel: onCancel, onMove: onMove)
     }
 
     func makeNSView(context: Context) -> NSTextField {
@@ -2203,6 +2212,8 @@ private struct ModeNameTextField: NSViewRepresentable {
         }
         context.coordinator.text = $text
         context.coordinator.onSubmit = onSubmit
+        context.coordinator.onCancel = onCancel
+        context.coordinator.onMove = onMove
         DispatchQueue.main.async {
             if nsView.window?.firstResponder !== nsView.currentEditor() {
                 nsView.window?.makeFirstResponder(nsView)
@@ -2213,10 +2224,20 @@ private struct ModeNameTextField: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var text: Binding<String>
         var onSubmit: () -> Void
+        var onCancel: () -> Void
+        var onMove: (Int) -> Void
+        var didRequestFocus = false
 
-        init(text: Binding<String>, onSubmit: @escaping () -> Void) {
+        init(
+            text: Binding<String>,
+            onSubmit: @escaping () -> Void,
+            onCancel: @escaping () -> Void,
+            onMove: @escaping (Int) -> Void
+        ) {
             self.text = text
             self.onSubmit = onSubmit
+            self.onCancel = onCancel
+            self.onMove = onMove
         }
 
         func controlTextDidChange(_ obj: Notification) {
@@ -2225,12 +2246,29 @@ private struct ModeNameTextField: NSViewRepresentable {
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            switch commandSelector {
+            case #selector(NSResponder.insertNewline(_:)):
                 text.wrappedValue = control.stringValue
                 onSubmit()
                 return true
+            case #selector(NSResponder.cancelOperation(_:)):
+                onCancel()
+                return true
+            case #selector(NSResponder.moveDown(_:)):
+                onMove(1)
+                return true
+            case #selector(NSResponder.moveUp(_:)):
+                onMove(-1)
+                return true
+            case #selector(NSResponder.insertTab(_:)):
+                onMove(1)
+                return true
+            case #selector(NSResponder.insertBacktab(_:)):
+                onMove(-1)
+                return true
+            default:
+                return false
             }
-            return false
         }
     }
 }
@@ -2275,7 +2313,9 @@ private struct SaveModeOverlay: View {
                     placeholder: "Mode name",
                     onSubmit: {
                         selectedModeIndex >= 0 ? onReplace() : onSaveNew()
-                    }
+                    },
+                    onCancel: onCancel,
+                    onMove: onMoveSelection
                 )
                     .frame(height: 32)
                     .padding(.horizontal, 14)
@@ -2292,13 +2332,23 @@ private struct SaveModeOverlay: View {
                     SaveModeChoiceRow(
                         title: "Save as new mode",
                         detail: "Return",
-                        isSelected: selectedModeIndex < 0
+                        windows: capturedWindows,
+                        isSelected: selectedModeIndex < 0,
+                        action: {
+                            selectedModeIndex = -1
+                            onSaveNew()
+                        }
                     )
                     ForEach(Array(modes.enumerated()), id: \.element.id) { index, mode in
                         SaveModeChoiceRow(
                             title: "Replace \(mode.name)",
                             detail: mode.shortcutLabel,
-                            isSelected: selectedModeIndex == index
+                            windows: mode.windows,
+                            isSelected: selectedModeIndex == index,
+                            action: {
+                                selectedModeIndex = index
+                                onReplace()
+                            }
                         )
                     }
                 }
@@ -2424,41 +2474,70 @@ private struct AppBundleIcon: View {
 private struct SaveModeChoiceRow: View {
     let title: String
     let detail: String
+    let windows: [SavedModeWindow]
     let isSelected: Bool
+    let action: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "square.grid.3x1.below.line.grid.1x2")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.82))
-                .frame(width: 34, height: 34)
+        Button(action: action) {
+            HStack(spacing: 12) {
+                SaveModeIconCluster(windows: windows)
+                    .frame(width: 84, height: 30, alignment: .leading)
 
-            Text(title)
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(.white)
-                .lineLimit(1)
+                Text(title)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
 
-            Spacer()
+                Spacer()
 
-            Text(detail)
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(.white.opacity(0.72))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(.white.opacity(0.10), in: Capsule())
+                Text(detail)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.72))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.white.opacity(0.10), in: Capsule())
 
-            if isSelected {
-                Image(systemName: "return")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.white.opacity(0.62))
+                if isSelected {
+                    Image(systemName: "return")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white.opacity(0.62))
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity)
+            .background(.white.opacity(isSelected ? 0.16 : 0.045), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(.white.opacity(isSelected ? 0.72 : 0.12), lineWidth: isSelected ? 1.5 : 1)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(.white.opacity(isSelected ? 0.16 : 0.045), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(.white.opacity(isSelected ? 0.72 : 0.12), lineWidth: isSelected ? 1.5 : 1)
+        .buttonStyle(.plain)
+    }
+}
+
+private struct SaveModeIconCluster: View {
+    let windows: [SavedModeWindow]
+
+    var body: some View {
+        HStack(spacing: -6) {
+            ForEach(Array(windows.prefix(4).enumerated()), id: \.element.id) { _, window in
+                AppBundleIcon(bundleIdentifier: window.bundleIdentifier, fallbackSystemName: "app.dashed")
+                    .frame(width: 18, height: 18)
+                    .padding(3)
+                    .background(.white.opacity(0.96), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .strokeBorder(.black.opacity(0.08), lineWidth: 1)
+                    }
+            }
+            if windows.isEmpty {
+                Image(systemName: "app.dashed")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.62))
+                    .frame(width: 24, height: 24)
+            }
         }
     }
 }
@@ -2748,6 +2827,7 @@ private struct PaletteSearchTextField: NSViewRepresentable {
         field.cell?.usesSingleLineMode = true
         field.cell?.lineBreakMode = .byTruncatingTail
         DispatchQueue.main.async {
+            context.coordinator.didRequestFocus = true
             field.window?.makeFirstResponder(field)
         }
         return field
@@ -2762,7 +2842,9 @@ private struct PaletteSearchTextField: NSViewRepresentable {
         context.coordinator.onSubmit = onSubmit
         context.coordinator.onCancel = onCancel
         context.coordinator.onMove = onMove
+        guard !context.coordinator.didRequestFocus else { return }
         DispatchQueue.main.async {
+            context.coordinator.didRequestFocus = true
             if nsView.window?.firstResponder !== nsView.currentEditor() {
                 nsView.window?.makeFirstResponder(nsView)
             }
@@ -2774,6 +2856,7 @@ private struct PaletteSearchTextField: NSViewRepresentable {
         var onSubmit: () -> Void
         var onCancel: () -> Void
         var onMove: (Int) -> Void
+        var didRequestFocus = false
 
         init(
             text: Binding<String>,
@@ -2789,10 +2872,10 @@ private struct PaletteSearchTextField: NSViewRepresentable {
 
         func controlTextDidChange(_ obj: Notification) {
             guard let field = obj.object as? NSTextField else { return }
-            if field.stringValue == "/" {
-                field.stringValue = ""
-                text.wrappedValue = ""
-                onCancel()
+            if field.stringValue.hasPrefix("/") {
+                let cleaned = String(field.stringValue.drop { $0 == "/" })
+                field.stringValue = cleaned
+                text.wrappedValue = cleaned
                 return
             }
             text.wrappedValue = field.stringValue
@@ -2861,6 +2944,15 @@ private struct BoardPaletteResultRow: View {
                     .background(.white.opacity(0.10), in: Capsule())
             }
 
+            if result.isModeManagementAction {
+                Text("Settings")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(.white.opacity(0.10), in: Capsule())
+            }
+
             if result.isDiaTab {
                 Text("Dia tab")
                     .font(.caption2.weight(.bold))
@@ -2887,6 +2979,10 @@ private struct BoardPaletteResultRow: View {
     @ViewBuilder
     private var icon: some View {
         switch result {
+        case .manageModes:
+            Image(systemName: "gearshape")
+                .font(.system(size: 23, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.82))
         case .savedMode:
             Image(systemName: "square.grid.3x1.below.line.grid.1x2")
                 .font(.system(size: 23, weight: .semibold))
@@ -3096,25 +3192,6 @@ private struct ShortcutHelpRow: View {
                 .foregroundStyle(.white.opacity(0.72))
                 .lineLimit(1)
         }
-    }
-}
-
-private enum AppIconCache {
-    private static var icons: [String: NSImage] = [:]
-
-    static func icon(for bundleIdentifier: String) -> NSImage? {
-        if let cached = icons[bundleIdentifier] {
-            return cached
-        }
-
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else {
-            return nil
-        }
-
-        let icon = NSWorkspace.shared.icon(forFile: url.path)
-        icon.size = NSSize(width: 96, height: 96)
-        icons[bundleIdentifier] = icon
-        return icon
     }
 }
 

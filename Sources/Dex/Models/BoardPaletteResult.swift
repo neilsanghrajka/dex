@@ -10,12 +10,15 @@ enum BoardPaletteMode: Equatable {
 }
 
 enum BoardPaletteResult: Identifiable, Equatable {
+    case manageModes
     case savedMode(SavedMode)
     case application(InstalledApplication)
     case diaTab(DiaTab, parentAppName: String, parentBundleIdentifier: String)
 
     var id: String {
         switch self {
+        case .manageModes:
+            "action:manage-modes"
         case .savedMode(let mode):
             "mode:\(mode.id)"
         case .application(let application):
@@ -27,6 +30,8 @@ enum BoardPaletteResult: Identifiable, Equatable {
 
     var title: String {
         switch self {
+        case .manageModes:
+            "Manage Modes"
         case .savedMode(let mode):
             mode.name
         case .application(let application):
@@ -38,6 +43,8 @@ enum BoardPaletteResult: Identifiable, Equatable {
 
     var subtitle: String {
         switch self {
+        case .manageModes:
+            "Rename or delete saved modes"
         case .savedMode(let mode):
             "\(mode.windows.count) windows"
         case .application(let application):
@@ -52,6 +59,11 @@ enum BoardPaletteResult: Identifiable, Equatable {
         return false
     }
 
+    var isModeManagementAction: Bool {
+        if case .manageModes = self { return true }
+        return false
+    }
+
     var isSavedMode: Bool {
         if case .savedMode = self { return true }
         return false
@@ -59,6 +71,8 @@ enum BoardPaletteResult: Identifiable, Equatable {
 
     var rightAccessory: String? {
         switch self {
+        case .manageModes:
+            nil
         case .savedMode(let mode):
             mode.shortcutLabel
         case .application, .diaTab:
@@ -71,6 +85,11 @@ enum BoardPaletteResult: Identifiable, Equatable {
         guard !normalized.isEmpty else { return false }
 
         switch self {
+        case .manageModes:
+            return tokenizedMatch(
+                query: normalized,
+                corpus: "mode modes manage modes settings saved mode rename mode delete mode edit mode"
+            )
         case .savedMode(let mode):
             return tokenizedMatch(
                 query: normalized,

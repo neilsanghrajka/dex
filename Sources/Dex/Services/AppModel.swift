@@ -236,9 +236,53 @@ final class AppModel: ObservableObject {
         modes.append(mode)
         savedModes = modes.sorted { lhs, rhs in lhs.slot < rhs.slot }
         store.saveSavedModes(savedModes)
+        activateModeFromCurrentArrangement(mode, displayID: displayID)
         showHUD("\(mode.name) saved as \(mode.shortcutLabel)")
         refocusArrangeBoardIfNeeded()
         return mode
+    }
+
+    func renameMode(id: UUID, to rawName: String) {
+        let cleanedName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanedName.isEmpty else {
+            showHUD("Mode name cannot be empty")
+            return
+        }
+        guard let index = savedModes.firstIndex(where: { $0.id == id }) else {
+            showHUD("Mode not found")
+            return
+        }
+
+        savedModes[index].name = cleanedName
+        savedModes[index].updatedAt = Date()
+        savedModes = savedModes.sorted { lhs, rhs in lhs.slot < rhs.slot }
+        store.saveSavedModes(savedModes)
+
+        activeModeInstances = activeModeInstances.map { instance in
+            guard instance.modeID == id else { return instance }
+            var updated = instance
+            updated.modeName = cleanedName
+            return updated
+        }
+        showHUD("Renamed mode")
+    }
+
+    func deleteMode(id: UUID) {
+        guard let mode = savedModes.first(where: { $0.id == id }) else {
+            showHUD("Mode not found")
+            return
+        }
+        savedModes.removeAll { $0.id == id }
+        store.saveSavedModes(savedModes)
+        activeModeInstances.removeAll { $0.modeID == id }
+        modeLaunchConfirmation = .idle
+        showHUD("Deleted \(mode.name)")
+    }
+
+    func openModeManagement() {
+        closeArrangeBoard()
+        NSApp.activate(ignoringOtherApps: true)
+        showHUD("Manage modes in Dex")
     }
 
     func mode(forSlot slot: Int) -> SavedMode? {
@@ -328,15 +372,27 @@ final class AppModel: ObservableObject {
         guard let instance = activeModeInstances.first(where: { $0.id == id }) else { return }
         let bindingIDs = Set(instance.windowBindings.map(\.windowID))
         let liveWindows = windows.filter { bindingIDs.contains($0.id) }
+        let windowsByPID = Dictionary(grouping: liveWindows, by: \.pid)
+        var terminatedPIDs = Set<pid_t>()
 
-        for window in liveWindows {
-            accessibility.closeWindowOnly(window)
-            removeWindowFromAllStacks(window.id)
+        for (pid, modeWindows) in windowsByPID {
+            let nonModeWindows = windows.filter { $0.pid == pid && !bindingIDs.contains($0.id) }
+            if nonModeWindows.isEmpty,
+               let app = NSRunningApplication(processIdentifier: pid) {
+                app.terminate()
+                terminatedPIDs.insert(pid)
+                modeWindows.forEach { removeWindowFromAllStacks($0.id) }
+            } else {
+                for window in modeWindows {
+                    accessibility.closeWindowOnly(window)
+                    removeWindowFromAllStacks(window.id)
+                }
+            }
         }
 
         removeActiveModeInstance(id: id)
         saveAllStackStores()
-        showHUD("Closed \(instance.modeName)")
+        showHUD(terminatedPIDs.isEmpty ? "Closed \(instance.modeName)" : "Quit \(instance.modeName)")
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 350_000_000)
             await refreshWindows(includeThumbnails: true)
@@ -1046,6 +1102,38 @@ final class AppModel: ObservableObject {
             }
         }
         return captured
+    }
+
+    private func activateModeFromCurrentArrangement(_ mode: SavedMode, displayID: String) {
+        guard let display = display(withID: displayID) else { return }
+        let bindings = ColumnRole.allCases.flatMap { role in
+            boardWindows(for: role, on: display).map { window in
+                ActiveModeWindowBinding(
+                    windowID: window.id,
+                    role: role,
+                    appName: window.appName,
+                    bundleIdentifier: window.bundleIdentifier
+                )
+            }
+        }
+        guard !bindings.isEmpty else { return }
+
+        let instance = ActiveModeInstance(
+            id: UUID(),
+            modeID: mode.id,
+            modeName: mode.name,
+            slot: mode.slot,
+            displayID: displayID,
+            spaceID: activeLayoutSpaceID(),
+            windowBindings: bindings,
+            startedAt: Date()
+        )
+        activeModeInstances.removeAll { existing in
+            existing.modeID == mode.id &&
+                existing.displayID == displayID &&
+                existing.spaceID == instance.spaceID
+        }
+        activeModeInstances.append(instance)
     }
 
     private func selectedLaunchPolicy() -> ModeLaunchPolicy {

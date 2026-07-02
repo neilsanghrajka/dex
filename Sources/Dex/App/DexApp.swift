@@ -10,7 +10,7 @@ struct DexApp: App {
         WindowGroup("Dex", id: "main") {
             ContentView()
                 .environmentObject(model)
-                .frame(width: 560, height: 640)
+                .frame(width: 560, height: model.savedModes.isEmpty ? 640 : 760)
                 .onAppear {
                     appDelegate.configure(model: model)
                 }
