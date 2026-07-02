@@ -6,14 +6,15 @@ final class BoardShortcutValidationTests: XCTestCase {
     func testForceNewShortcutPolicy() {
         XCTAssertTrue(BoardAppShortcut.terminal.spec.forceNew)
         XCTAssertTrue(BoardAppShortcut.claude.spec.forceNew)
+        XCTAssertTrue(BoardAppShortcut.dia.spec.forceNew)
         XCTAssertTrue(BoardAppShortcut.codex.spec.forceNew)
-        XCTAssertFalse(BoardAppShortcut.dia.spec.forceNew)
         XCTAssertFalse(BoardAppShortcut.perplexity.spec.forceNew)
     }
 
     func testElectronForceNewShortcutsUseNewWindowMenuFallback() {
         XCTAssertEqual(BoardAppShortcut.codex.spec.newWindowMenuItemTitles, ["New Window"])
         XCTAssertEqual(BoardAppShortcut.claude.spec.newWindowMenuItemTitles, ["New Window"])
+        XCTAssertEqual(BoardAppShortcut.dia.spec.newWindowMenuItemTitles, ["New Window"])
         XCTAssertEqual(BoardAppShortcut.terminal.spec.newWindowMenuItemTitles, [])
     }
 

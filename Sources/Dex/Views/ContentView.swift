@@ -3,8 +3,23 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        Group {
+            if model.isOnboardingWizardActive {
+                OnboardingView()
+                    .environmentObject(model)
+            } else {
+                mainContent
+            }
+        }
+        .onAppear {
+            model.openMainWindowAction = { openWindow(id: "main") }
+        }
+    }
+
+    private var mainContent: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 14) {
                 AppHeader()

@@ -345,7 +345,9 @@ struct ArrangeBoardView: View {
                         query: $paletteQuery,
                         results: filteredPaletteResults,
                         shortcuts: model.savedModes.map { ($0.name, $0.shortcutLabel) } +
-                            BoardAppShortcut.allCases.map { ($0.spec.label, shortcutLabel(model.shortcut(for: $0))) },
+                            model.appShortcutBindings
+                                .filter { !$0.key.isEmpty }
+                                .map { ($0.displayName, $0.keyLabel) },
                         isLoading: isPaletteLoading,
                         selectedIndex: $paletteSelectionIndex,
                         onMove: movePaletteSelection,
@@ -396,6 +398,28 @@ struct ArrangeBoardView: View {
                     .zIndex(44)
                 }
             }
+            .overlay(alignment: .bottom) {
+                if ownsBoardInput, let step = model.tourStep {
+                    TourCoachCard(
+                        step: step,
+                        exampleBinding: model.tourExampleBinding,
+                        legendShortcuts: legendShortcuts,
+                        onSkip: { model.exitTour() },
+                        onDone: { model.completeTour() }
+                    )
+                    .padding(.bottom, 42)
+                    .zIndex(46)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if ownsBoardInput, model.tourStep == nil, model.isBoardLegendVisibleThisSession {
+                    BoardLegendBar(onDismiss: { model.dismissBoardLegend() })
+                        .padding(.bottom, 18)
+                        .zIndex(29)
+                        .transition(.opacity)
+                }
+            }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .onExitCommand {
                 if isPaletteVisible {
@@ -412,6 +436,10 @@ struct ArrangeBoardView: View {
                 }
                 if case .confirming = model.modeLaunchConfirmation {
                     model.cancelModeLaunchConfirmation()
+                    return
+                }
+                if model.tourStep != nil {
+                    model.exitTour()
                     return
                 }
                 model.closeArrangeBoard()
@@ -443,6 +471,13 @@ struct ArrangeBoardView: View {
 
     private var filteredPaletteResults: [BoardPaletteResult] {
         BoardPaletteSearch.filtered(paletteResults, query: paletteQuery)
+    }
+
+    /// Live app-launch bindings as (label, key) pairs for the tour step-4 mini legend.
+    private var legendShortcuts: [(String, String)] {
+        model.appShortcutBindings
+            .filter { !$0.key.isEmpty }
+            .map { ($0.displayName, $0.keyLabel) }
     }
 
     private var paletteResults: [BoardPaletteResult] {
@@ -659,6 +694,16 @@ struct ArrangeBoardView: View {
             moveSelection(.up)
             return true
         case 36, 76:
+            if model.tourStep == .jump {
+                // Teach Return without tearing the board down mid-tour.
+                model.advanceTour(from: .jump)
+                return true
+            }
+            // During any other tour step, Return must not activate a window (which would
+            // close the board and abandon the tour). Swallow it so the tour stays live.
+            if model.tourStep != nil {
+                return true
+            }
             activateSelectedWindow()
             return true
         default:
@@ -679,6 +724,12 @@ struct ArrangeBoardView: View {
             showPalette()
             return true
         case "q":
+            // Q closes/quits the selected item. Suppress it during the tour so a stray
+            // press can't destroy the user's windows while they're being taught; the
+            // closing card teaches Q only as information.
+            if model.tourStep != nil {
+                return true
+            }
             closeSelectedItem()
             return true
         default:
@@ -719,16 +770,13 @@ struct ArrangeBoardView: View {
         let key = event.charactersIgnoringModifiers?.lowercased().filter { $0.isLetter || $0.isNumber } ?? ""
         guard !key.isEmpty else { return false }
 
-        guard let shortcut = BoardAppShortcut.allCases.first(where: { model.shortcut(for: $0).lowercased() == key }) else {
+        guard let binding = model.appShortcutBinding(forKey: key) else {
             return false
         }
 
-        openShortcut(shortcut)
+        openShortcut(binding)
+        model.advanceTour(from: .shortcut)
         return true
-    }
-
-    private func shortcutLabel(_ key: String) -> String {
-        key.uppercased()
     }
 
     private func switchFocusArea(reverse: Bool = false) {
@@ -790,12 +838,16 @@ struct ArrangeBoardView: View {
 
     private func moveSelection(_ direction: BoardNavigationDirection) {
         ensureSelection()
+        let previousSelection = selection
         guard let target = visualNavigationTarget(direction) else { return }
         if let role = target.selection.role {
             activeColumnRole = role
         }
         selection = target.selection
         applySelectionSideEffects()
+        if target.selection != previousSelection {
+            model.advanceTour(from: .navigate)
+        }
     }
 
     private func visualNavigationTarget(_ direction: BoardNavigationDirection) -> BoardNavigationCandidate? {
@@ -1302,9 +1354,13 @@ struct ArrangeBoardView: View {
     }
 
     private func moveSelectedWindow(_ windowID: String, to role: ColumnRole) {
+        let previousRole = selection?.role
         activeColumnRole = role
         selection = .assigned(role, windowID)
         model.moveBoardWindow(windowID: windowID, to: role, displayID: display.id)
+        if previousRole != role {
+            model.advanceTour(from: .moveColumn)
+        }
     }
 
     private func handleWindowEdgeMove(direction: DisplaySwitchDirection) -> Bool {
@@ -1334,6 +1390,20 @@ struct ArrangeBoardView: View {
             return
         }
 
+        // During the tour's move-column step the selection may not be a window (e.g. a
+        // running-app card carried in from the previous step). Re-select an actual window
+        // so Option+arrow performs the taught move instead of launching an app; if the
+        // board has no movable window, advance so the step doesn't wedge.
+        if model.tourStep == .moveColumn {
+            if let fallbackWindowID = firstMovableWindowID() {
+                activeColumnRole = role
+                selection = .assigned(role, fallbackWindowID)
+                model.moveBoardWindow(windowID: fallbackWindowID, to: role, displayID: display.id)
+            }
+            model.advanceTour(from: .moveColumn)
+            return
+        }
+
         guard let appID = selection?.runningApplicationID,
               let item = runningApps.first(where: { $0.id == appID }) else {
             selection = .column(role)
@@ -1346,12 +1416,24 @@ struct ArrangeBoardView: View {
         }
     }
 
-    private func openShortcut(_ shortcut: BoardAppShortcut) {
+    /// The first assignable/movable window on the board, preferring assigned columns and
+    /// falling back to the unassigned shelf. Used to recover the tour's move-column step
+    /// when the selection isn't a window.
+    private func firstMovableWindowID() -> String? {
+        for role in ColumnRole.allCases {
+            if let window = windows(for: role).first {
+                return window.id
+            }
+        }
+        return model.unassignedWindows(on: display).first?.id
+    }
+
+    private func openShortcut(_ binding: AppShortcutBinding) {
         let role = activeRole()
         activeColumnRole = role
         selection = .column(role)
         Task {
-            await model.openShortcut(shortcut, in: role, displayID: display.id)
+            await model.openAppShortcut(binding, in: role, displayID: display.id)
         }
     }
 
@@ -3205,5 +3287,159 @@ private struct HUDView: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 12)
             .background(.black.opacity(0.72), in: Capsule())
+    }
+}
+
+/// Bottom-center coach card for the in-board guided tour (Act 3). Non-blocking: the
+/// board keeps keyboard ownership so each step advances when the user acts.
+private struct TourCoachCard: View {
+    let step: OnboardingTourStep
+    let exampleBinding: AppShortcutBinding?
+    let legendShortcuts: [(String, String)]
+    let onSkip: () -> Void
+    let onDone: () -> Void
+
+    private var stepNumber: Int { step.rawValue + 1 }
+    private var stepCount: Int { OnboardingTourStep.allCases.count }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                Text("Step \(stepNumber) of \(stepCount)")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.6))
+                Spacer()
+                if step != .closing {
+                    Button("Skip", action: onSkip)
+                        .buttonStyle(.plain)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+            }
+
+            Text(title)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let detail {
+                Text(detail)
+                    .font(.callout)
+                    .foregroundStyle(.white.opacity(0.72))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if step == .shortcut, !legendShortcuts.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(legendShortcuts.enumerated()), id: \.offset) { _, shortcut in
+                        ShortcutHelpRow(keys: shortcut.1, label: shortcut.0)
+                    }
+                }
+                Text("Make these your own — any app, any key — in Settings (⌘,).")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.6))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if step == .closing {
+                HStack {
+                    Spacer()
+                    Button(action: onDone) {
+                        Text("Done")
+                            .font(.headline)
+                            .frame(minWidth: 90)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding(.top, 2)
+            }
+        }
+        .padding(22)
+        .frame(width: 460, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(.white.opacity(0.22), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.34), radius: 38, y: 18)
+    }
+
+    private var title: String {
+        switch step {
+        case .navigate:
+            return "Use ← → ↑ ↓ to move between columns and shelves"
+        case .jump:
+            return "Press Return to jump to the selected window"
+        case .moveColumn:
+            return "Hold ⌥ Option and press ← or → to move this window to another column"
+        case .shortcut:
+            if let binding = exampleBinding, !binding.key.isEmpty {
+                return "Press \(binding.keyLabel) to open \(binding.displayName) in this column"
+            }
+            return "Press an app key to open it in this column"
+        case .closing:
+            return "You're all set"
+        }
+    }
+
+    private var detail: String? {
+        switch step {
+        case .navigate:
+            return "The highlight follows your arrows across the three columns and the shelves below."
+        case .jump:
+            return nil
+        case .moveColumn:
+            return nil
+        case .shortcut:
+            return "Each key opens (or moves) its app straight into the focused column."
+        case .closing:
+            return "/ opens the palette · ⌥S saves this layout as a Mode · ⌥1–9 recalls Modes · Q closes things · Esc leaves"
+        }
+    }
+}
+
+/// One-line dismissible key legend shown along the board's bottom edge for the first
+/// few sessions after the tour completes.
+private struct BoardLegendBar: View {
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 14) {
+            legendItem("/", "Palette")
+            legendItem("⌥S", "Save Mode")
+            legendItem("⌥1–9", "Modes")
+            legendItem("Q", "Close")
+            legendItem("Esc", "Leave")
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.72))
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 4)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay {
+            Capsule()
+                .strokeBorder(.white.opacity(0.18), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.28), radius: 20, y: 8)
+    }
+
+    private func legendItem(_ keys: String, _ label: String) -> some View {
+        HStack(spacing: 6) {
+            Text(keys)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(.white.opacity(0.16), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.72))
+        }
     }
 }

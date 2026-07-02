@@ -32,8 +32,8 @@ enum BoardAppShortcut: String, CaseIterable, Codable, Identifiable {
                 label: "Dia",
                 bundleIdentifiers: ["company.thebrowser.dia"],
                 appNames: ["Dia"],
-                forceNew: false,
-                newWindowMenuItemTitles: []
+                forceNew: true,
+                newWindowMenuItemTitles: ["New Window"]
             )
         case .perplexity:
             BoardAppShortcutSpec(
@@ -62,6 +62,32 @@ enum BoardAppShortcut: String, CaseIterable, Codable, Identifiable {
         case .perplexity: "p"
         case .codex: "x"
         }
+    }
+
+    /// Stable identifier used for the matching default `AppShortcutBinding`.
+    /// Kept fixed so legacy key overrides can be migrated onto the right starter app.
+    var defaultBindingID: UUID {
+        switch self {
+        case .terminal: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        case .claude: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+        case .dia: UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
+        case .perplexity: UUID(uuidString: "44444444-4444-4444-4444-444444444444")!
+        case .codex: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!
+        }
+    }
+
+    /// The default user-editable binding shipped for this starter app.
+    var defaultBinding: AppShortcutBinding {
+        let spec = spec
+        return AppShortcutBinding(
+            id: defaultBindingID,
+            displayName: spec.label,
+            bundleIdentifiers: spec.bundleIdentifiers,
+            appNames: spec.appNames,
+            key: defaultKeySequence,
+            preferNewWindow: spec.forceNew,
+            newWindowMenuItemTitles: spec.newWindowMenuItemTitles
+        )
     }
 }
 

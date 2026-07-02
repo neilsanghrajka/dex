@@ -13,6 +13,10 @@ struct MenuBarView: View {
             Task { await model.arrangeNow() }
         }
 
+        Button("Replay Tour") {
+            Task { await model.replayTour() }
+        }
+
         Divider()
 
         Toggle("Arrange All Displays", isOn: $model.arrangeAllDisplays)

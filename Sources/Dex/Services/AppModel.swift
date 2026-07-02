@@ -11,9 +11,18 @@ final class AppModel: ObservableObject {
             store.arrangeAllDisplays = arrangeAllDisplays
         }
     }
-    @Published var boardShortcutMappings: [BoardAppShortcut: String] {
+    /// Live, user-editable list of app-launch shortcuts. Single source of truth for
+    /// the board key handler, the palette shortcut-help, and (later) the onboarding tour.
+    @Published var appShortcutBindings: [AppShortcutBinding] {
         didSet {
-            store.saveShortcutMappings(boardShortcutMappings)
+            store.saveAppShortcutBindings(appShortcutBindings)
+        }
+    }
+    /// Apps in this list should get a fresh window when Dex opens them from the
+    /// board, palette, or running-app shelf.
+    @Published var newWindowLaunchRules: [NewWindowLaunchRule] {
+        didSet {
+            store.saveNewWindowLaunchRules(newWindowLaunchRules)
         }
     }
     @Published var hoveredSnapRole: ColumnRole?
@@ -27,6 +36,28 @@ final class AppModel: ObservableObject {
     @Published private(set) var isArrangeBoardVisible = false
     @Published var activeBoardDisplayID: String?
     @Published var activeBoardDesktopID: String?
+
+    // MARK: Onboarding
+    /// Drives whether `ContentView` shows the first-run wizard (Acts 1 & 2).
+    @Published var isOnboardingWizardActive: Bool
+    /// Registered by a live SwiftUI view (Settings / main window) so onboarding replay can
+    /// recreate the main "Dex" window via `openWindow(id:)`. Re-fronting `NSApp.windows`
+    /// alone cannot bring back a `WindowGroup` window the user has closed.
+    var openMainWindowAction: (() -> Void)?
+    /// The current wizard stage while `isOnboardingWizardActive` is true.
+    @Published var onboardingPhase: OnboardingPhase = .welcome
+    /// The active in-board tour step, or `nil` when no tour is running (Act 3).
+    @Published private(set) var tourStep: OnboardingTourStep?
+    /// Whether the reinforcement legend is showing along the board's bottom edge.
+    @Published private(set) var isBoardLegendVisibleThisSession = false
+    /// Settings toggle: allow the post-tour reinforcement legend at all.
+    @Published var showsBoardLegend: Bool {
+        didSet {
+            store.showsBoardLegend = showsBoardLegend
+        }
+    }
+    /// How many board sessions after tour completion keep showing the legend.
+    private static let boardLegendSessionCount = 5
 
     let permissions = PermissionService()
     private let accessibility = AccessibilityWindowService()
@@ -49,8 +80,11 @@ final class AppModel: ObservableObject {
         self.arrangeAllDisplays = store.arrangeAllDisplays
         self.stacksByDisplay = store.loadStacks()
         self.stacksByWorkspace = store.loadWorkspaceStacks()
-        self.boardShortcutMappings = store.loadShortcutMappings()
+        self.appShortcutBindings = store.loadAppShortcutBindings()
+        self.newWindowLaunchRules = store.loadNewWindowLaunchRules()
         self.savedModes = store.loadSavedModes()
+        self.showsBoardLegend = store.showsBoardLegend
+        self.isOnboardingWizardActive = !store.hasCompletedOnboarding
     }
 
     func start() {
@@ -78,6 +112,10 @@ final class AppModel: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 guard self.isArrangeBoardVisible == true else { return }
+                if self.tourStep != nil {
+                    self.exitTour()
+                    return
+                }
                 self.closeArrangeBoard()
             }
         }
@@ -111,6 +149,7 @@ final class AppModel: ObservableObject {
         if permissions.isInputMonitoringTrusted {
             eventMonitor.start()
         }
+        advanceOnboardingIfRequiredPermissionsGranted()
     }
 
     func requestAccessibility() {
@@ -158,6 +197,8 @@ final class AppModel: ObservableObject {
         overlayController.showArrangeBoard(model: self, displays: displays)
         isArrangeBoardVisible = true
         startArrangeBoardSpaceRefreshLoop()
+        beginInBoardTourIfSummoning()
+        updateBoardLegendVisibilityForNewSession()
 
         Task { @MainActor in
             await refreshWindows(includeThumbnails: true)
@@ -166,11 +207,19 @@ final class AppModel: ObservableObject {
     }
 
     func closeArrangeBoard() {
+        // Closing the board (e.g. a second double-Option) must not leave the tour
+        // half-running: clear the step so it does not re-appear on reopen, and treat
+        // the interruption as completing onboarding so the wizard never re-runs.
+        if tourStep != nil {
+            finishOnboarding()
+            tourStep = nil
+        }
         overlayController.closeArrangeBoard()
         stopArrangeBoardSpaceRefreshLoop()
         activeBoardDisplayID = nil
         activeBoardDesktopID = nil
         isArrangeBoardVisible = false
+        isBoardLegendVisibleThisSession = false
     }
 
     func toggleArrangeBoard() async {
@@ -554,8 +603,62 @@ final class AppModel: ObservableObject {
         refocusArrangeBoardIfNeeded()
     }
 
-    func openShortcut(_ shortcut: BoardAppShortcut, in role: ColumnRole, displayID: String) async {
-        let spec = shortcut.spec
+    func openAppShortcut(_ binding: AppShortcutBinding, in role: ColumnRole, displayID: String) async {
+        await openLaunchTarget(launchSpec(for: binding), launchURL: nil, in: role, displayID: displayID)
+    }
+
+    func installedApplications() -> [InstalledApplication] {
+        applicationCatalog.installedApplications()
+    }
+
+    func loadInstalledApplications() async -> [InstalledApplication] {
+        await Task.detached(priority: .userInitiated) { [applicationCatalog] in
+            applicationCatalog.installedApplications()
+        }.value
+    }
+
+    /// Installed applications plus currently-running regular apps, deduplicated and
+    /// sorted by name. Used by the Settings "Add App…" picker for new bindings.
+    func availableApplicationsForBinding() async -> [InstalledApplication] {
+        let installed = await loadInstalledApplications()
+        let running: [InstalledApplication] = NSWorkspace.shared.runningApplications.compactMap { app in
+            guard app.activationPolicy == .regular,
+                  let url = app.bundleURL,
+                  let name = app.localizedName,
+                  !name.isEmpty else {
+                return nil
+            }
+            return InstalledApplication(
+                id: url.path,
+                name: name,
+                bundleIdentifier: app.bundleIdentifier,
+                url: url
+            )
+        }
+
+        let dexBundleID = Bundle.main.bundleIdentifier
+        var seen = Set<String>()
+        var combined: [InstalledApplication] = []
+        for app in running + installed {
+            if let dexBundleID, app.bundleIdentifier == dexBundleID { continue }
+            guard seen.insert(app.id).inserted else { continue }
+            combined.append(app)
+        }
+        return combined.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
+    func openApplication(_ application: InstalledApplication, in role: ColumnRole, displayID: String) async {
+        await openLaunchTarget(launchSpec(for: application), launchURL: application.url, in: role, displayID: displayID)
+    }
+
+    private func openLaunchTarget(
+        _ spec: BoardAppShortcutSpec,
+        launchURL: URL?,
+        in role: ColumnRole,
+        displayID: String
+    ) async {
         await refreshWindows(includeThumbnails: false)
         let existingMatchingWindows = windows.filter { spec.matches($0) }
         let launchSnapshot = BoardWindowLaunchSnapshot(windows: existingMatchingWindows)
@@ -576,74 +679,20 @@ final class AppModel: ObservableObject {
             return
         }
 
-        guard launch(spec) else {
+        guard launch(spec, url: launchURL) else {
             showHUD("Could not open \(spec.label)")
+            refocusArrangeBoardIfNeeded()
             return
         }
 
-        let launched = await waitForLaunchedWindow(matching: spec, excluding: launchSnapshot)
-        if let launched {
+        if let launched = await waitForLaunchedWindow(matching: spec, excluding: launchSnapshot) {
             assign(windowID: launched.id, to: role, displayID: displayID)
             accessibility.raise(launched)
             showHUD("Opened \(spec.label) in \(role.title)")
-            refocusArrangeBoardIfNeeded()
         } else {
-            if let launched = await openNewWindowUsingAppCommandIfAvailable(spec, excluding: launchSnapshot) {
-                assign(windowID: launched.id, to: role, displayID: displayID)
-                accessibility.raise(launched)
-                showHUD("Opened \(spec.label) in \(role.title)")
-                refocusArrangeBoardIfNeeded()
-            } else {
-                showHUD(spec.forceNew ? "Could not open new \(spec.label) window" : "Opened \(spec.label)")
-                refocusArrangeBoardIfNeeded()
-            }
+            showHUD(spec.forceNew ? "Could not open new \(spec.label) window" : "Opened \(spec.label)")
         }
-    }
-
-    func installedApplications() -> [InstalledApplication] {
-        applicationCatalog.installedApplications()
-    }
-
-    func loadInstalledApplications() async -> [InstalledApplication] {
-        await Task.detached(priority: .userInitiated) { [applicationCatalog] in
-            applicationCatalog.installedApplications()
-        }.value
-    }
-
-    func openApplication(_ application: InstalledApplication, in role: ColumnRole, displayID: String) async {
-        await refreshWindows(includeThumbnails: false)
-        if let existing = windows.first(where: { window in
-            if let bundleIdentifier = application.bundleIdentifier,
-               window.bundleIdentifier == bundleIdentifier {
-                return true
-            }
-            return window.appName.localizedCaseInsensitiveContains(application.name)
-        }) {
-            assign(windowID: existing.id, to: role, displayID: displayID)
-            accessibility.raise(existing)
-            showHUD("Moved \(application.name) to \(role.title)")
-            refocusArrangeBoardIfNeeded()
-            return
-        }
-
-        NSWorkspace.shared.open(application.url)
-        try? await Task.sleep(nanoseconds: 900_000_000)
-        await refreshWindows(includeThumbnails: true)
-        if let launched = windows.first(where: { window in
-            if let bundleIdentifier = application.bundleIdentifier,
-               window.bundleIdentifier == bundleIdentifier {
-                return true
-            }
-            return window.appName.localizedCaseInsensitiveContains(application.name)
-        }) {
-            assign(windowID: launched.id, to: role, displayID: displayID)
-            accessibility.raise(launched)
-            showHUD("Opened \(application.name) in \(role.title)")
-            refocusArrangeBoardIfNeeded()
-        } else {
-            showHUD("Opened \(application.name)")
-            refocusArrangeBoardIfNeeded()
-        }
+        refocusArrangeBoardIfNeeded()
     }
 
     func runningApplicationsWithoutVisibleWindows(on display: DisplayInfo) -> [RunningApplicationItem] {
@@ -680,6 +729,11 @@ final class AppModel: ObservableObject {
         in role: ColumnRole,
         displayID: String
     ) async {
+        if newWindowLaunchRule(matching: item) != nil {
+            await openLaunchTarget(launchSpec(for: item), launchURL: item.url, in: role, displayID: displayID)
+            return
+        }
+
         await refreshWindows(includeThumbnails: false)
         if let existing = firstWindow(matching: item) {
             assign(windowID: existing.id, to: role, displayID: displayID)
@@ -741,22 +795,360 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func shortcut(for shortcut: BoardAppShortcut) -> String {
-        boardShortcutMappings[shortcut] ?? shortcut.defaultKeySequence
+    // MARK: - App-launch shortcut bindings
+
+    /// The default starter set, exposed so onboarding/settings can offer a reset.
+    var defaultAppShortcutBindings: [AppShortcutBinding] {
+        AppShortcutBinding.defaults
     }
 
-    func setShortcut(_ shortcut: BoardAppShortcut, sequence: String) {
-        let cleaned = BoardShortcutValidation.clean(sequence)
-        let resolved = cleaned.isEmpty ? shortcut.defaultKeySequence : cleaned
-        var candidate = boardShortcutMappings
-        candidate[shortcut] = resolved
+    var defaultNewWindowLaunchRules: [NewWindowLaunchRule] {
+        NewWindowLaunchRule.defaults
+    }
 
-        guard BoardShortcutValidation.isValid(resolved, for: shortcut, in: candidate) else {
-            showHUD("Shortcut \(resolved.uppercased()) conflicts")
+    @discardableResult
+    func addNewWindowLaunchRule(for application: InstalledApplication) -> NewWindowLaunchRule? {
+        if newWindowLaunchRule(matching: application) != nil {
+            showHUD("\(application.name) already opens new windows")
+            return nil
+        }
+
+        let rule = NewWindowLaunchRule.from(application: application)
+        newWindowLaunchRules = NewWindowLaunchRule.deduplicated(newWindowLaunchRules + [rule])
+        showHUD("\(rule.displayName) will open new windows")
+        return rule
+    }
+
+    func removeNewWindowLaunchRule(id: String) {
+        guard let index = newWindowLaunchRules.firstIndex(where: { $0.id == id }) else { return }
+        let removed = newWindowLaunchRules.remove(at: index)
+        showHUD("\(removed.displayName) will reuse existing windows")
+    }
+
+    func resetNewWindowLaunchRulesToDefaults() {
+        newWindowLaunchRules = defaultNewWindowLaunchRules
+        showHUD("Restored new-window app defaults")
+    }
+
+    func appShortcutBinding(withID id: UUID) -> AppShortcutBinding? {
+        appShortcutBindings.first { $0.id == id }
+    }
+
+    /// The binding whose key matches a pressed board key, if any.
+    func appShortcutBinding(forKey key: String) -> AppShortcutBinding? {
+        let cleaned = BoardShortcutValidation.clean(key)
+        guard !cleaned.isEmpty else { return nil }
+        return appShortcutBindings.first { $0.key == cleaned }
+    }
+
+    /// Add a binding for an installed application, auto-assigning the first free key.
+    /// Returns the created binding, or `nil` if it is already bound or no key is free.
+    @discardableResult
+    func addAppShortcutBinding(for application: InstalledApplication) -> AppShortcutBinding? {
+        if let existing = appShortcutBindings.first(where: { binding in
+            if let bundleID = application.bundleIdentifier {
+                return binding.bundleIdentifiers.contains(bundleID)
+            }
+            return binding.appNames.contains { $0.caseInsensitiveCompare(application.name) == .orderedSame }
+        }) {
+            showHUD("\(existing.displayName) is already bound to \(existing.keyLabel)")
+            return nil
+        }
+
+        guard let key = firstAvailableShortcutKey() else {
+            showHUD("No free keys left. Change or remove one first.")
+            return nil
+        }
+
+        let binding = AppShortcutBinding(
+            displayName: application.name,
+            bundleIdentifiers: application.bundleIdentifier.map { [$0] } ?? [],
+            appNames: [application.name],
+            key: key,
+            preferNewWindow: false
+        )
+        appShortcutBindings.append(binding)
+        showHUD("Bound \(binding.displayName) to \(binding.keyLabel)")
+        return binding
+    }
+
+    func removeAppShortcutBinding(id: UUID) {
+        guard let index = appShortcutBindings.firstIndex(where: { $0.id == id }) else { return }
+        let removed = appShortcutBindings.remove(at: index)
+        showHUD("Removed \(removed.displayName)")
+    }
+
+    /// Assign a key to a binding after validating it. Returns the validation result so
+    /// the UI can surface the reason inline (reserved key, conflict, etc.).
+    @discardableResult
+    func setAppShortcutKey(_ pressedCharacter: String, for id: UUID) -> AppShortcutKeyValidation.Result {
+        let result = AppShortcutKeyValidation.validate(
+            pressedCharacter: pressedCharacter,
+            for: id,
+            in: appShortcutBindings
+        )
+        if case .valid(let key) = result,
+           let index = appShortcutBindings.firstIndex(where: { $0.id == id }) {
+            appShortcutBindings[index].key = key
+        }
+        return result
+    }
+
+    /// Assign `key` to `id`, first clearing it from whichever binding currently holds it.
+    /// Used by the "replace" affordance when a conflict is reported.
+    func replaceAppShortcutKey(_ pressedCharacter: String, for id: UUID) {
+        let cleaned = BoardShortcutValidation.clean(pressedCharacter.lowercased())
+        guard cleaned.count == 1,
+              !AppShortcutKeyValidation.reservedKeys.contains(cleaned),
+              cleaned != "/",
+              let targetIndex = appShortcutBindings.firstIndex(where: { $0.id == id }) else {
             return
         }
 
-        boardShortcutMappings = candidate
+        var updated = appShortcutBindings
+        for index in updated.indices where updated[index].id != id && updated[index].key == cleaned {
+            updated[index].key = ""
+        }
+        updated[targetIndex].key = cleaned
+        appShortcutBindings = updated
+    }
+
+    func setPreferNewWindow(_ preferNewWindow: Bool, for id: UUID) {
+        guard let index = appShortcutBindings.firstIndex(where: { $0.id == id }) else { return }
+        appShortcutBindings[index].preferNewWindow = preferNewWindow
+    }
+
+    func resetAppShortcutBindingsToDefaults() {
+        appShortcutBindings = AppShortcutBinding.defaults
+        showHUD("Restored default shortcuts")
+    }
+
+    private func launchSpec(for binding: AppShortcutBinding) -> BoardAppShortcutSpec {
+        let rule = newWindowLaunchRule(
+            matchingBundleIdentifiers: binding.bundleIdentifiers,
+            appNames: binding.appNames
+        )
+        if let rule {
+            return rule.launchSpec(
+                label: binding.displayName,
+                bundleIdentifiers: binding.bundleIdentifiers,
+                appNames: binding.appNames
+            )
+        }
+        return BoardAppShortcutSpec(
+            label: binding.displayName,
+            bundleIdentifiers: binding.bundleIdentifiers,
+            appNames: binding.appNames,
+            forceNew: false,
+            newWindowMenuItemTitles: binding.newWindowMenuItemTitles
+        )
+    }
+
+    private func launchSpec(for application: InstalledApplication) -> BoardAppShortcutSpec {
+        let bundleIdentifiers = application.bundleIdentifier.map { [$0] } ?? []
+        let rule = newWindowLaunchRule(matching: application)
+        if let rule {
+            return rule.launchSpec(
+                label: application.name,
+                bundleIdentifiers: bundleIdentifiers,
+                appNames: [application.name]
+            )
+        }
+        return BoardAppShortcutSpec(
+            label: application.name,
+            bundleIdentifiers: bundleIdentifiers,
+            appNames: [application.name],
+            forceNew: false,
+            newWindowMenuItemTitles: []
+        )
+    }
+
+    private func launchSpec(for item: RunningApplicationItem) -> BoardAppShortcutSpec {
+        let bundleIdentifiers = item.bundleIdentifier.map { [$0] } ?? []
+        if let rule = newWindowLaunchRule(matching: item) {
+            return rule.launchSpec(
+                label: item.name,
+                bundleIdentifiers: bundleIdentifiers,
+                appNames: [item.name]
+            )
+        }
+        return BoardAppShortcutSpec(
+            label: item.name,
+            bundleIdentifiers: bundleIdentifiers,
+            appNames: [item.name],
+            forceNew: false,
+            newWindowMenuItemTitles: []
+        )
+    }
+
+    private func newWindowLaunchRule(matching application: InstalledApplication) -> NewWindowLaunchRule? {
+        newWindowLaunchRules.first { $0.matches(application) }
+    }
+
+    private func newWindowLaunchRule(matching item: RunningApplicationItem) -> NewWindowLaunchRule? {
+        newWindowLaunchRules.first { $0.matches(item) }
+    }
+
+    private func newWindowLaunchRule(
+        matchingBundleIdentifiers bundleIdentifiers: [String],
+        appNames: [String]
+    ) -> NewWindowLaunchRule? {
+        newWindowLaunchRules.first {
+            $0.matches(bundleIdentifiers: bundleIdentifiers, appNames: appNames)
+        }
+    }
+
+    private func firstAvailableShortcutKey() -> String? {
+        let taken = Set(appShortcutBindings.map(\.key))
+        let candidates = (Array("abcdefghijklmnoprstuvwxyz") + Array("0123456789")).map { String($0) }
+        return candidates.first { candidate in
+            !taken.contains(candidate) && !AppShortcutKeyValidation.reservedKeys.contains(candidate)
+        }
+    }
+
+    // MARK: - Onboarding
+
+    /// The example binding used by tour step 4 ("Press <key> to open <app>"): the first
+    /// LIVE binding that still has a key assigned. Returns `nil` when the user has cleared
+    /// every key, so the tour can skip the un-completable shortcut step rather than show a
+    /// default key that isn't actually mapped.
+    var tourExampleBinding: AppShortcutBinding? {
+        appShortcutBindings.first { !$0.key.isEmpty }
+    }
+
+    /// Advance the wizard from the welcome screen to the permission checklist.
+    func beginOnboardingPermissions() {
+        onboardingPhase = .permissions
+        advanceOnboardingIfRequiredPermissionsGranted()
+    }
+
+    /// Auto-advance the wizard to the summon gate once both required permissions
+    /// (Accessibility + Input Monitoring) are granted. Screen Recording is optional.
+    private func advanceOnboardingIfRequiredPermissionsGranted() {
+        guard isOnboardingWizardActive, onboardingPhase == .permissions else { return }
+        guard permissions.isAccessibilityTrusted, permissions.isInputMonitoringTrusted else { return }
+        onboardingPhase = .summon
+    }
+
+    /// Start the full onboarding flow again from the welcome screen (Settings → General).
+    /// Already-granted permission rows simply render as granted.
+    func replayOnboarding() {
+        if isArrangeBoardVisible {
+            closeArrangeBoard()
+        }
+        tourStep = nil
+        onboardingPhase = .welcome
+        isOnboardingWizardActive = true
+        showMainWindow()
+    }
+
+    /// Jump straight into the in-board guided tour (menu bar "Replay Tour").
+    func replayTour() async {
+        isOnboardingWizardActive = false
+        tourStep = .navigate
+        if !isArrangeBoardVisible {
+            await showArrangeBoard()
+        }
+        // Accessibility may be missing: showArrangeBoard leaves the board hidden.
+        if !isArrangeBoardVisible {
+            tourStep = nil
+        }
+    }
+
+    /// If the board was just opened while waiting on the summon gate, hide the wizard
+    /// window and drop the user straight into the in-board tour.
+    private func beginInBoardTourIfSummoning() {
+        guard isArrangeBoardVisible, isOnboardingWizardActive, onboardingPhase == .summon else { return }
+        // Persist onboarding completion the moment the user reaches the in-board tour.
+        // If they quit before finishing/skipping the tour, the wizard must not re-run
+        // the whole flow (Welcome/Permissions) on the next launch.
+        finishOnboarding()
+        tourStep = .navigate
+        hideMainWindow()
+    }
+
+    /// Advance the tour when the user performs the action for `step`. No-op if the tour
+    /// is on a different step (so repeated/late detections are ignored).
+    func advanceTour(from step: OnboardingTourStep) {
+        guard tourStep == step else { return }
+        guard let next = step.next else {
+            completeTour()
+            return
+        }
+        tourStep = next
+        // The shortcut step can only be completed by pressing a live, key-bound app.
+        // If the user has cleared every shortcut key, skip it rather than stranding them
+        // on a step whose instructed key isn't actually mapped.
+        if next == .shortcut, tourExampleBinding == nil {
+            advanceTour(from: .shortcut)
+        }
+    }
+
+    /// The user pressed Done on the closing card, or finished the last step.
+    func completeTour() {
+        tourStep = nil
+        finishOnboarding()
+        boardLegendSessionsRemaining = Self.boardLegendSessionCount
+        updateBoardLegendVisibilityForNewSession()
+    }
+
+    /// The user pressed Esc (or a skip link) during the tour.
+    func exitTour() {
+        guard tourStep != nil else { return }
+        tourStep = nil
+        finishOnboarding()
+        showHUD("Replay the tour anytime from the menu bar")
+    }
+
+    func dismissBoardLegend() {
+        isBoardLegendVisibleThisSession = false
+    }
+
+    /// Persist the onboarding-complete flag. Called on completing or exiting either the
+    /// wizard or the tour.
+    private func finishOnboarding() {
+        isOnboardingWizardActive = false
+        if !store.hasCompletedOnboarding {
+            store.hasCompletedOnboarding = true
+        }
+    }
+
+    private var boardLegendSessionsRemaining: Int {
+        get { store.boardLegendSessionsRemaining }
+        set { store.boardLegendSessionsRemaining = newValue }
+    }
+
+    /// Decide whether the reinforcement legend shows for a freshly opened board session.
+    private func updateBoardLegendVisibilityForNewSession() {
+        guard isArrangeBoardVisible, tourStep == nil, !isOnboardingWizardActive else {
+            isBoardLegendVisibleThisSession = false
+            return
+        }
+        guard showsBoardLegend, boardLegendSessionsRemaining > 0 else {
+            isBoardLegendVisibleThisSession = false
+            return
+        }
+        isBoardLegendVisibleThisSession = true
+        boardLegendSessionsRemaining -= 1
+    }
+
+    private func hideMainWindow() {
+        for window in NSApp.windows where window.isVisible && window.title == "Dex" {
+            window.orderOut(nil)
+        }
+    }
+
+    private func showMainWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        // Recreate the WindowGroup window if it was closed; this also re-fronts an existing
+        // one. Fall back to fronting any live "Dex" window if no action was registered.
+        if let openMainWindowAction {
+            openMainWindowAction()
+        } else {
+            for window in NSApp.windows where window.title == "Dex" {
+                window.makeKeyAndOrderFront(nil)
+            }
+        }
     }
 
     func cycleStack(_ direction: CycleDirection, trigger: CycleTrigger) async {
@@ -1314,11 +1706,12 @@ final class AppModel: ObservableObject {
         _ spec: BoardAppShortcutSpec,
         excluding snapshot: BoardWindowLaunchSnapshot
     ) async -> ManagedWindow? {
-        guard spec.forceNew, !spec.newWindowMenuItemTitles.isEmpty else {
+        guard spec.forceNew else {
             return nil
         }
 
-        if accessibility.pressNewWindowMenuItem(
+        if !spec.newWindowMenuItemTitles.isEmpty,
+           accessibility.pressNewWindowMenuItem(
             bundleIdentifiers: spec.bundleIdentifiers,
             appNames: spec.appNames,
             itemTitles: spec.newWindowMenuItemTitles
@@ -1565,12 +1958,16 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func launch(_ spec: BoardAppShortcutSpec) -> Bool {
+    private func launch(_ spec: BoardAppShortcutSpec, url: URL? = nil) -> Bool {
         if spec.forceNew {
             for bundleID in spec.bundleIdentifiers {
                 if launchWithOpen(arguments: ["-n", "-b", bundleID]) {
                     return true
                 }
+            }
+
+            if let url, launchWithOpen(arguments: ["-n", url.path]) {
+                return true
             }
 
             for name in spec.appNames {
@@ -1580,6 +1977,11 @@ final class AppModel: ObservableObject {
             }
 
             return false
+        }
+
+        if let url {
+            NSWorkspace.shared.open(url)
+            return true
         }
 
         for bundleID in spec.bundleIdentifiers {

@@ -2,48 +2,48 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         TabView {
             Form {
-                Toggle("Arrange all displays by default", isOn: $model.arrangeAllDisplays)
-                Text("When disabled, double Option opens the Arrange Board only for the active display. When enabled, each display gets its own three-tile board.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Section {
+                    Toggle("Arrange all displays by default", isOn: $model.arrangeAllDisplays)
+                    Text("When disabled, double Option opens the Arrange Board only for the active display. When enabled, each display gets its own three-tile board.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Onboarding") {
+                    Toggle("Show shortcut legend on the board after onboarding", isOn: $model.showsBoardLegend)
+                    Button("Replay onboarding") {
+                        model.replayOnboarding()
+                    }
+                    Text("Replays the full welcome flow. Permissions you have already granted stay granted.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding(20)
             .tabItem {
                 Label("General", systemImage: "gearshape")
             }
 
-            Form {
-                Section("Activation Board App Shortcuts") {
-                    ForEach(BoardAppShortcut.allCases) { shortcut in
-                        HStack {
-                            Text(shortcut.spec.label)
-                            Spacer()
-                            TextField(
-                                shortcut.defaultKeySequence,
-                                text: Binding(
-                                    get: { model.shortcut(for: shortcut) },
-                                    set: { model.setShortcut(shortcut, sequence: $0) }
-                                )
-                            )
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 80)
-                            .multilineTextAlignment(.center)
-                        }
-                    }
+            AppShortcutSettingsView()
+                .tabItem {
+                    Label("Shortcuts", systemImage: "keyboard")
                 }
-                Text("Use one letter or number. Press it while the Arrange Board is open. Reserved: Q for close/quit. Use / for the palette.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(20)
-            .tabItem {
-                Label("Shortcuts", systemImage: "keyboard")
-            }
+
+            NewWindowLaunchSettingsView()
+                .tabItem {
+                    Label("Windows", systemImage: "macwindow.badge.plus")
+                }
         }
-        .frame(width: 520, height: 320)
+        .frame(width: 560, height: 460)
+        .onAppear {
+            // Settings is reachable even when the main window has been closed; capture the
+            // scene's openWindow action so "Replay onboarding" can recreate that window.
+            model.openMainWindowAction = { openWindow(id: "main") }
+        }
     }
 }
