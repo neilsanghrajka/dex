@@ -16,6 +16,7 @@ final class LayoutStore {
     private let appShortcutBindingsKey = "dex.appShortcutBindings"
     private let newWindowLaunchRulesKey = "dex.newWindowLaunchRules"
     private let savedModesKey = "dex.savedModes"
+    private let displayLayoutKindsKey = "dex.displayLayoutKinds"
     private let hasCompletedOnboardingKey = "dex.hasCompletedOnboarding"
     private let showsBoardLegendKey = "dex.showsBoardLegend"
     private let boardLegendSessionsRemainingKey = "dex.boardLegendSessionsRemaining"
@@ -78,6 +79,22 @@ final class LayoutStore {
     func saveWorkspaceStacks(_ stacks: [String: ColumnStackState]) {
         guard let data = try? JSONEncoder().encode(stacks) else { return }
         defaults.set(data, forKey: workspaceStacksKey)
+    }
+
+    func loadDisplayLayoutKinds() -> [String: BoardLayoutKind] {
+        guard let data = defaults.data(forKey: displayLayoutKindsKey),
+              let raw = try? JSONDecoder().decode([String: BoardLayoutKind].self, from: data) else {
+            return [:]
+        }
+        return raw.filter { key, _ in LayoutWorkspaceID(rawValue: key) != nil }
+    }
+
+    func saveDisplayLayoutKinds(_ layoutKinds: [String: BoardLayoutKind]) {
+        let nonDefault = layoutKinds.filter { key, kind in
+            kind != .defaultKind && LayoutWorkspaceID(rawValue: key) != nil
+        }
+        guard let data = try? JSONEncoder().encode(nonDefault) else { return }
+        defaults.set(data, forKey: displayLayoutKindsKey)
     }
 
     func loadShortcutMappings() -> [BoardAppShortcut: String] {
@@ -216,6 +233,7 @@ final class LayoutStore {
             defaults.data(forKey: workspaceStacksKey) != nil ||
             defaults.data(forKey: shortcutMappingsKey) != nil ||
             defaults.data(forKey: savedModesKey) != nil ||
+            defaults.data(forKey: displayLayoutKindsKey) != nil ||
             defaults.data(forKey: appShortcutBindingsKey) != nil ||
             defaults.data(forKey: newWindowLaunchRulesKey) != nil ||
             defaults.object(forKey: allDisplaysKey) != nil ||

@@ -78,4 +78,43 @@ struct ColumnStackState: Codable, Equatable {
             }
         }
     }
+
+    func orderedWindowIDs(preferredRoles: [ColumnRole]) -> [String] {
+        var seen = Set<String>()
+        let orderedRoles = preferredRoles + ColumnRole.allCases.filter { !preferredRoles.contains($0) }
+        return orderedRoles.flatMap { role in
+            windowsStartingAtActive(in: role).filter { seen.insert($0).inserted }
+        }
+    }
+
+    func filtered(to roles: [ColumnRole]) -> ColumnStackState {
+        var next = ColumnStackState()
+        var seen = Set<String>()
+        for role in roles {
+            let ids = windowsStartingAtActive(in: role).filter { seen.insert($0).inserted }
+            next.windowIDsByColumn[role] = ids
+            next.activeIndexByColumn[role] = 0
+        }
+        return next
+    }
+
+    func reflowing(from previousRoles: [ColumnRole], to nextRoles: [ColumnRole]) -> ColumnStackState {
+        reflowing(orderedWindowIDs(preferredRoles: previousRoles), into: nextRoles)
+    }
+
+    func reflowing(_ windowIDs: [String], into roles: [ColumnRole]) -> ColumnStackState {
+        guard let overflowRole = roles.last else { return ColumnStackState() }
+        var next = ColumnStackState()
+        var idsByRole: [ColumnRole: [String]] = [:]
+        for (index, windowID) in windowIDs.enumerated() {
+            let role = index < roles.count ? roles[index] : overflowRole
+            idsByRole[role, default: []].append(windowID)
+        }
+        for role in roles {
+            let ids = idsByRole[role, default: []]
+            next.windowIDsByColumn[role] = ids
+            next.activeIndexByColumn[role] = 0
+        }
+        return next
+    }
 }

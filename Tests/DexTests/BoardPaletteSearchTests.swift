@@ -11,6 +11,18 @@ final class BoardPaletteSearchTests: XCTestCase {
         XCTAssertEqual(BoardPaletteSearch.filtered(results, query: ""), [])
     }
 
+    func testLayoutShortcutMatchesBySlotAndName() {
+        let wideCenter = BoardPaletteResult.layout(.wideCenter, slot: 1)
+        let halves = BoardPaletteResult.layout(.halves, slot: 5)
+
+        XCTAssertEqual(BoardPaletteSearch.filtered([wideCenter, halves], query: "layout 1"), [wideCenter])
+        XCTAssertEqual(BoardPaletteSearch.filtered([wideCenter, halves], query: "two halves"), [halves])
+        XCTAssertEqual(wideCenter.title, "1 Wide Center")
+        XCTAssertEqual(wideCenter.subtitle, "Layout preset for this monitor and Space")
+        XCTAssertEqual(wideCenter.rightAccessory, "1")
+        XCTAssertTrue(wideCenter.isLayoutShortcut)
+    }
+
     func testFiltersInstalledApplicationsByNameAndBundle() {
         let claude = BoardPaletteResult.application(
             sampleApplication(name: "Claude", bundleIdentifier: "com.anthropic.claudefordesktop")

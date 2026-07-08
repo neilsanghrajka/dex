@@ -9,9 +9,49 @@ struct SavedMode: Codable, Identifiable, Equatable {
     var id: UUID
     var name: String
     var slot: Int
+    var layoutKind: BoardLayoutKind
     var windows: [SavedModeWindow]
     var createdAt: Date
     var updatedAt: Date
+
+    init(
+        id: UUID,
+        name: String,
+        slot: Int,
+        layoutKind: BoardLayoutKind = .defaultKind,
+        windows: [SavedModeWindow],
+        createdAt: Date,
+        updatedAt: Date
+    ) {
+        self.id = id
+        self.name = name
+        self.slot = slot
+        self.layoutKind = layoutKind
+        self.windows = windows
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case slot
+        case layoutKind
+        case windows
+        case createdAt
+        case updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        slot = try container.decode(Int.self, forKey: .slot)
+        layoutKind = try container.decodeIfPresent(BoardLayoutKind.self, forKey: .layoutKind) ?? .defaultKind
+        windows = try container.decode([SavedModeWindow].self, forKey: .windows)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    }
 
     var shortcutLabel: String {
         "Option+\(slot)"
@@ -55,10 +95,11 @@ struct ActiveModeWindowBinding: Identifiable, Equatable {
 }
 
 struct ModeCapturePreview: Equatable {
+    var layoutKind: BoardLayoutKind = .defaultKind
     var windowsByRole: [ColumnRole: [SavedModeWindow]]
 
     var isEmpty: Bool {
-        ColumnRole.allCases.allSatisfy { windowsByRole[$0, default: []].isEmpty }
+        layoutKind.roles.allSatisfy { windowsByRole[$0, default: []].isEmpty }
     }
 }
 

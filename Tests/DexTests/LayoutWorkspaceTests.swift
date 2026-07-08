@@ -61,6 +61,25 @@ final class LayoutWorkspaceTests: XCTestCase {
         XCTAssertEqual(store.loadWorkspaceStacks()[key]?.windows(in: .right), ["workspace"])
     }
 
+    func testLayoutStorePersistsNonDefaultLayoutKindPerWorkspace() {
+        let suiteName = "DexTests.displayLayoutKinds"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let store = LayoutStore(defaults: defaults)
+        let workspaceKey = LayoutWorkspaceID(displayID: "display-1", spaceID: "space-a").rawValue
+
+        store.saveDisplayLayoutKinds([
+            workspaceKey: .twoByTwo,
+            "display-2": .halves,
+            LayoutWorkspaceID(displayID: "display-3", spaceID: "space-b").rawValue: .defaultKind
+        ])
+
+        let loaded = store.loadDisplayLayoutKinds()
+        XCTAssertEqual(loaded[workspaceKey], .twoByTwo)
+        XCTAssertNil(loaded["display-2"])
+        XCTAssertNil(loaded[LayoutWorkspaceID(displayID: "display-3", spaceID: "space-b").rawValue])
+    }
+
     func testLayoutStoreMigratesLegacyDexSettings() throws {
         let suiteName = "DexTests.legacyMigration.current"
         let legacySuiteName = "DexTests.legacyMigration.legacy"

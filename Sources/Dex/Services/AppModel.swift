@@ -6,6 +6,7 @@ final class AppModel: ObservableObject {
     @Published var windows: [ManagedWindow] = []
     @Published var stacksByDisplay: [String: ColumnStackState] = [:]
     @Published private var stacksByWorkspace: [String: ColumnStackState] = [:]
+    @Published var layoutKindsByWorkspace: [String: BoardLayoutKind] = [:]
     @Published var arrangeAllDisplays: Bool {
         didSet {
             store.arrangeAllDisplays = arrangeAllDisplays
@@ -80,6 +81,7 @@ final class AppModel: ObservableObject {
         self.arrangeAllDisplays = store.arrangeAllDisplays
         self.stacksByDisplay = store.loadStacks()
         self.stacksByWorkspace = store.loadWorkspaceStacks()
+        self.layoutKindsByWorkspace = store.loadDisplayLayoutKinds()
         self.appShortcutBindings = store.loadAppShortcutBindings()
         self.newWindowLaunchRules = store.loadNewWindowLaunchRules()
         self.savedModes = store.loadSavedModes()
@@ -238,8 +240,54 @@ final class AppModel: ObservableObject {
         showHUD("Arranged \(arrangeAllDisplays ? "all displays" : "active display")")
     }
 
+    func layoutKind(for displayID: String, spaceID: String? = nil) -> BoardLayoutKind {
+        layoutKindsByWorkspace[workspaceKey(for: displayID, spaceID: spaceID), default: .defaultKind]
+    }
+
+    func grid(for display: DisplayInfo) -> GridLayout {
+        GridLayout(visibleFrame: display.visibleFrame, kind: layoutKind(for: display.id))
+    }
+
+    func layoutRoles(for display: DisplayInfo) -> [ColumnRole] {
+        grid(for: display).roles
+    }
+
+    @discardableResult
+    func applyLayoutShortcut(_ slot: Int, displayID: String) -> ColumnRole? {
+        guard let kind = BoardLayoutKind.shortcutKind(for: slot),
+              let display = display(withID: displayID) else {
+            return nil
+        }
+
+        let activeWorkspaceKey = workspaceKey(for: displayID)
+        let previousGrid = grid(for: display)
+        layoutKindsByWorkspace[activeWorkspaceKey] = kind
+        store.saveDisplayLayoutKinds(layoutKindsByWorkspace)
+
+        let nextGrid = GridLayout(visibleFrame: display.visibleFrame, kind: kind)
+        let didReflowStack = reflowCurrentWorkspaceStack(
+            for: displayID,
+            workspaceKey: activeWorkspaceKey,
+            previousGrid: previousGrid,
+            nextGrid: nextGrid
+        )
+        saveWorkspaceStacks()
+
+        if didReflowStack || previousGrid.kind != nextGrid.kind {
+            arrangeAssignedWindows(displayIDs: Set([displayID]), raiseActiveWindows: !isArrangeBoardVisible)
+        }
+
+        showHUD(kind.displayName)
+        refocusArrangeBoardIfNeeded()
+        refreshThumbnailsAfterWindowGeometryChange()
+        return nextGrid.roles.first
+    }
+
     func modeCapturePreview(displayID: String) -> ModeCapturePreview {
-        ModeCapturePreview(windowsByRole: capturedModeWindows(displayID: displayID))
+        ModeCapturePreview(
+            layoutKind: layoutKind(for: displayID),
+            windowsByRole: capturedModeWindows(displayID: displayID)
+        )
     }
 
     @discardableResult
@@ -247,7 +295,8 @@ final class AppModel: ObservableObject {
         let cleanedName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         let name = cleanedName.isEmpty ? "Group \(savedModes.count + 1)" : cleanedName
         let captured = capturedModeWindows(displayID: displayID)
-        let windows = ColumnRole.allCases.flatMap { role in
+        let modeLayoutKind = layoutKind(for: displayID)
+        let windows = modeLayoutKind.roles.flatMap { role in
             captured[role, default: []]
         }
 
@@ -278,6 +327,7 @@ final class AppModel: ObservableObject {
             id: id,
             name: name,
             slot: slot,
+            layoutKind: modeLayoutKind,
             windows: windows,
             createdAt: createdAt,
             updatedAt: now
@@ -403,10 +453,18 @@ final class AppModel: ObservableObject {
         for window in liveWindows {
             if let binding = instance.windowBindings.first(where: { $0.windowID == window.id }),
                let display = display(withID: instance.displayID) {
-                accessibility.moveResize(window, to: display.grid.rect(for: binding.role))
+                accessibility.moveResize(window, to: grid(for: display).rect(for: binding.role))
             }
         }
-        for role in [ColumnRole.left, .right, .center] {
+        let roleOrder: [ColumnRole]
+        if let display = display(withID: instance.displayID) {
+            let layoutRoles = grid(for: display).roles
+            roleOrder = layoutRoles + ColumnRole.allCases.filter { !layoutRoles.contains($0) }
+        } else {
+            roleOrder = ColumnRole.allCases
+        }
+
+        for role in roleOrder {
             liveWindows
                 .filter { window in
                     instance.windowBindings.first(where: { $0.windowID == window.id })?.role == role
@@ -468,7 +526,7 @@ final class AppModel: ObservableObject {
         guard let display = targetDisplays().first(where: { $0.frame.contains(screenPoint) }) else {
             return
         }
-        assign(windowID: windowID, to: display.grid.nearestRole(to: screenPoint), displayID: display.id)
+        assign(windowID: windowID, to: grid(for: display).nearestRole(to: screenPoint), displayID: display.id)
     }
 
     func selectBoardWindow(windowID: String) {
@@ -1167,7 +1225,7 @@ final class AppModel: ObservableObject {
             return
         }
         setStackState(state, for: display.id)
-        accessibility.moveResize(window, to: display.grid.rect(for: role))
+        accessibility.moveResize(window, to: grid(for: display).rect(for: role))
         accessibility.raise(window)
         showHUD("\(role.title): \(window.displayTitle)")
     }
@@ -1233,9 +1291,11 @@ final class AppModel: ObservableObject {
             return spaceSlots.map { slot in
                 defer { targetIndex += 1 }
                 let targetID = "\(display.id):\(slot.id)"
-                let layoutSpaceID = displays.count == 1 ? slot.id : LayoutWorkspaceID.visibleSpaceID
+                let layoutSpaceID = displays.count == 1 ? slot.id : activeLayoutSpaceID()
                 let state = stackState(for: display.id, spaceID: layoutSpaceID)
-                let assignedCounts = Dictionary(uniqueKeysWithValues: ColumnRole.allCases.map { role in
+                let kind = layoutKind(for: display.id, spaceID: layoutSpaceID)
+                let roles = GridLayout(visibleFrame: display.visibleFrame, kind: kind).roles
+                let assignedCounts = Dictionary(uniqueKeysWithValues: roles.map { role in
                     (role, state.windows(in: role).count)
                 })
                 let assignedIDs = Set(ColumnRole.allCases.flatMap { state.windows(in: $0) })
@@ -1274,12 +1334,14 @@ final class AppModel: ObservableObject {
             }
             return nil
         }
+        let targetRole = display(withID: target.displayID)
+            .map { grid(for: $0).edgeRole(for: direction == .left ? .right : .left) } ?? target.role
 
         activeBoardDesktopID = nil
-        pendingBoardFocusRequest = .assigned(target.role, windowID)
+        pendingBoardFocusRequest = .assigned(targetRole, windowID)
         let previousWorkspaceStacks = stacksByWorkspace
         let previousDisplayStacks = stacksByDisplay
-        let didMove = assign(windowID: windowID, to: target.role, displayID: target.displayID)
+        let didMove = assign(windowID: windowID, to: targetRole, displayID: target.displayID)
         guard didMove else {
             stacksByWorkspace = previousWorkspaceStacks
             stacksByDisplay = previousDisplayStacks
@@ -1295,7 +1357,7 @@ final class AppModel: ObservableObject {
             overlayController.showArrangeBoard(model: self, displays: [display])
             refocusArrangeBoardIfNeeded()
         }
-        return target
+        return (target.displayID, targetRole)
     }
 
     func consumePendingBoardFocusRequest() -> BoardFocusRequest? {
@@ -1330,11 +1392,12 @@ final class AppModel: ObservableObject {
         LayoutWorkspaceID(displayID: displayID, spaceID: spaceID ?? activeLayoutSpaceID()).rawValue
     }
 
+    private func layoutMemoryKey(workspaceKey: String, kind: BoardLayoutKind) -> String {
+        "\(workspaceKey)\u{1F}layout:\(kind.rawValue)"
+    }
+
     private func activeLayoutSpaceID() -> String {
-        if allDisplays().count == 1 {
-            return MacOSSpaceReader.currentMainDisplaySpaceID() ?? LayoutWorkspaceID.visibleSpaceID
-        }
-        return LayoutWorkspaceID.visibleSpaceID
+        MacOSSpaceReader.currentMainDisplaySpaceID() ?? LayoutWorkspaceID.visibleSpaceID
     }
 
     private func saveWorkspaceStacks() {
@@ -1344,6 +1407,58 @@ final class AppModel: ObservableObject {
     private func saveAllStackStores() {
         store.saveWorkspaceStacks(stacksByWorkspace)
         store.saveStacks(stacksByDisplay)
+    }
+
+    @discardableResult
+    private func reflowCurrentWorkspaceStack(
+        for displayID: String,
+        workspaceKey: String,
+        previousGrid: GridLayout,
+        nextGrid: GridLayout
+    ) -> Bool {
+        var state = stackState(for: displayID)
+        let previousState = state
+        let visibleWindowIDs = Set(windows(on: displayID).map(\.id))
+        let shouldFilterToVisibleWindows = !visibleWindowIDs.isEmpty || !isArrangeBoardVisible
+        if !isArrangeBoardVisible {
+            state.prune(keeping: visibleWindowIDs)
+        }
+        stacksByWorkspace[layoutMemoryKey(workspaceKey: workspaceKey, kind: previousGrid.kind)] = state
+
+        var rememberedState = stacksByWorkspace[
+            layoutMemoryKey(workspaceKey: workspaceKey, kind: nextGrid.kind),
+            default: ColumnStackState()
+        ]
+        if shouldFilterToVisibleWindows {
+            rememberedState.prune(keeping: visibleWindowIDs)
+        }
+
+        var nextState = rememberedState.filtered(to: nextGrid.roles)
+        var assignedIDs = Set(nextState.orderedWindowIDs(preferredRoles: nextGrid.roles))
+        let orderedIDs = state.orderedWindowIDs(preferredRoles: previousGrid.roles)
+        for windowID in orderedIDs {
+            guard (!shouldFilterToVisibleWindows || visibleWindowIDs.contains(windowID)),
+                  !assignedIDs.contains(windowID),
+                  let previousRole = state.column(containing: windowID) else {
+                continue
+            }
+
+            let point = windows.first(where: { $0.id == windowID })?.frame.center ??
+                previousGrid.rect(for: previousRole).center
+            guard let role = nextGrid.nearestHorizontallyCompatibleRole(
+                to: point,
+                from: previousRole,
+                in: previousGrid
+            ) else {
+                continue
+            }
+            nextState.assign(windowID, to: role)
+            assignedIDs.insert(windowID)
+        }
+
+        stacksByWorkspace[workspaceKey] = nextState
+        stacksByWorkspace[layoutMemoryKey(workspaceKey: workspaceKey, kind: nextGrid.kind)] = nextState
+        return nextState != previousState
     }
 
     private func refreshWindows(includeThumbnails: Bool, pruneMissingWindows: Bool = true) async {
@@ -1483,8 +1598,9 @@ final class AppModel: ObservableObject {
 
     private func capturedModeWindows(displayID: String) -> [ColumnRole: [SavedModeWindow]] {
         guard let display = display(withID: displayID) else { return [:] }
+        let grid = grid(for: display)
         var captured: [ColumnRole: [SavedModeWindow]] = [:]
-        for role in ColumnRole.allCases {
+        for role in grid.roles {
             let liveWindows = boardWindows(for: role, on: display)
             captured[role] = liveWindows.enumerated().map { index, window in
                 SavedModeWindow(
@@ -1502,7 +1618,7 @@ final class AppModel: ObservableObject {
 
     private func activateModeFromCurrentArrangement(_ mode: SavedMode, displayID: String) {
         guard let display = display(withID: displayID) else { return }
-        let bindings = ColumnRole.allCases.flatMap { role in
+        let bindings = grid(for: display).roles.flatMap { role in
             boardWindows(for: role, on: display).map { window in
                 ActiveModeWindowBinding(
                     windowID: window.id,
@@ -1563,6 +1679,8 @@ final class AppModel: ObservableObject {
         }
 
         await refreshWindows(includeThumbnails: false)
+        layoutKindsByWorkspace[workspaceKey(for: display.id)] = mode.layoutKind
+        store.saveDisplayLayoutKinds(layoutKindsByWorkspace)
         var usedWindowIDs = Set<String>()
         var bindings: [ActiveModeWindowBinding] = []
 
@@ -1570,8 +1688,9 @@ final class AppModel: ObservableObject {
             if lhs.role == rhs.role {
                 return lhs.order < rhs.order
             }
-            let lhsIndex = ColumnRole.allCases.firstIndex(of: lhs.role) ?? 0
-            let rhsIndex = ColumnRole.allCases.firstIndex(of: rhs.role) ?? 0
+            let roles = mode.layoutKind.roles
+            let lhsIndex = roles.firstIndex(of: lhs.role) ?? 0
+            let rhsIndex = roles.firstIndex(of: rhs.role) ?? 0
             return lhsIndex < rhsIndex
         }) {
             if policy == .quitElsewhereAndReopenHere,
@@ -1768,7 +1887,7 @@ final class AppModel: ObservableObject {
                 windows: windows(on: display),
                 previousWindows: previousWindows.filter { displayID(for: $0) == display.id },
                 visibleFrame: display.visibleFrame,
-                grid: display.grid
+                grid: grid(for: display)
             )
             guard repaired != existing else {
                 continue
@@ -1798,8 +1917,9 @@ final class AppModel: ObservableObject {
                 setStackState(state, for: display.id, save: false)
             }
 
-            for role in ColumnRole.allCases {
-                let rect = display.grid.rect(for: role)
+            let grid = grid(for: display)
+            for role in grid.roles {
+                let rect = grid.rect(for: role)
                 let stack = state.windows(in: role)
                 for windowID in stack {
                     guard let window = windows.first(where: { $0.id == windowID }) else { continue }
@@ -1828,7 +1948,7 @@ final class AppModel: ObservableObject {
     private func updateControlDrag(at point: CGPoint) {
         guard let display = display(containing: point) else { return }
         overlayController.showSnapOverlay(model: self, displays: [display])
-        hoveredSnapRole = display.grid.nearestRole(to: point)
+        hoveredSnapRole = grid(for: display).nearestRole(to: point)
     }
 
     private func finishControlDrag(at point: CGPoint) async {
@@ -1839,7 +1959,7 @@ final class AppModel: ObservableObject {
               let frontmost = windows.first(where: { $0.pid == NSWorkspace.shared.frontmostApplication?.processIdentifier }) else {
             return
         }
-        let role = display.grid.nearestRole(to: point)
+        let role = grid(for: display).nearestRole(to: point)
         assign(windowID: frontmost.id, to: role, displayID: display.id)
         showHUD("Snapped to \(role.title)")
     }
@@ -2019,7 +2139,7 @@ final class AppModel: ObservableObject {
     private func cycleTarget(trigger: CycleTrigger) -> (display: DisplayInfo, role: ColumnRole)? {
         let pointer = NSEvent.mouseLocation
         if let display = display(containing: pointer) {
-            return (display, display.grid.nearestRole(to: pointer))
+            return (display, grid(for: display).nearestRole(to: pointer))
         }
 
         if trigger == .keyboard,
@@ -2027,14 +2147,17 @@ final class AppModel: ObservableObject {
            let window = windows.first(where: { $0.pid == frontmostPID }),
            let display = display(containing: window.frame.center) {
             let state = stackState(for: display.id)
-            if let assignedRole = ColumnRole.allCases.first(where: { state.windows(in: $0).contains(window.id) }) {
+            let grid = grid(for: display)
+            let roles = grid.roles + ColumnRole.allCases.filter { !grid.roles.contains($0) }
+            if let assignedRole = roles.first(where: { state.windows(in: $0).contains(window.id) }) {
                 return (display, assignedRole)
             }
-            return (display, display.grid.nearestRole(to: window.frame.center))
+            return (display, grid.nearestRole(to: window.frame.center))
         }
 
         if let display = activeDisplay() {
-            return (display, .center)
+            let grid = grid(for: display)
+            return (display, grid.roles.first ?? .center)
         }
 
         return nil

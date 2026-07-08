@@ -10,6 +10,7 @@ enum BoardPaletteMode: Equatable {
 }
 
 enum BoardPaletteResult: Identifiable, Equatable {
+    case layout(BoardLayoutKind, slot: Int)
     case manageModes
     case savedMode(SavedMode)
     case application(InstalledApplication)
@@ -17,6 +18,8 @@ enum BoardPaletteResult: Identifiable, Equatable {
 
     var id: String {
         switch self {
+        case .layout(_, let slot):
+            "layout:\(slot)"
         case .manageModes:
             "action:manage-modes"
         case .savedMode(let mode):
@@ -30,6 +33,8 @@ enum BoardPaletteResult: Identifiable, Equatable {
 
     var title: String {
         switch self {
+        case .layout(let kind, let slot):
+            "\(slot) \(kind.displayName)"
         case .manageModes:
             "Manage Groups"
         case .savedMode(let mode):
@@ -43,6 +48,8 @@ enum BoardPaletteResult: Identifiable, Equatable {
 
     var subtitle: String {
         switch self {
+        case .layout:
+            "Layout preset for this monitor and Space"
         case .manageModes:
             "Rename or delete saved groups"
         case .savedMode(let mode):
@@ -59,6 +66,11 @@ enum BoardPaletteResult: Identifiable, Equatable {
         return false
     }
 
+    var isLayoutShortcut: Bool {
+        if case .layout = self { return true }
+        return false
+    }
+
     var isModeManagementAction: Bool {
         if case .manageModes = self { return true }
         return false
@@ -71,6 +83,8 @@ enum BoardPaletteResult: Identifiable, Equatable {
 
     var rightAccessory: String? {
         switch self {
+        case .layout(_, let slot):
+            "\(slot)"
         case .manageModes:
             nil
         case .savedMode(let mode):
@@ -85,6 +99,11 @@ enum BoardPaletteResult: Identifiable, Equatable {
         guard !normalized.isEmpty else { return false }
 
         switch self {
+        case .layout(let kind, let slot):
+            return tokenizedMatch(
+                query: normalized,
+                corpus: "\(slot) layout layouts grid preset presets monitor space columns windows \(kind.displayName) shortcut \(slot)"
+            )
         case .manageModes:
             return tokenizedMatch(
                 query: normalized,

@@ -60,4 +60,46 @@ final class ColumnStackStateTests: XCTestCase {
         XCTAssertEqual(state.windowsStartingAtActive(in: .center), ["a", "b", "c"])
         XCTAssertEqual(state.windows(in: .center), ["a", "b", "c"])
     }
+
+    func testReflowFillsRolesInOrderAndStacksOverflowInFinalRole() {
+        let reflowed = ColumnStackState().reflowing(
+            ["a", "b", "c", "d", "e"],
+            into: [.left, .topRight, .bottomRight]
+        )
+
+        XCTAssertEqual(reflowed.windows(in: .left), ["a"])
+        XCTAssertEqual(reflowed.windows(in: .topRight), ["b"])
+        XCTAssertEqual(reflowed.windows(in: .bottomRight), ["c", "d", "e"])
+        XCTAssertEqual(reflowed.windowsStartingAtActive(in: .bottomRight), ["c", "d", "e"])
+        XCTAssertEqual(reflowed.activeWindowID(in: .bottomRight), "c")
+    }
+
+    func testReflowingFromPreviousRolesClearsOldRoleAssignments() {
+        var state = ColumnStackState()
+        state.assign("a", to: .left)
+        state.assign("b", to: .center)
+        state.assign("c", to: .right)
+
+        let reflowed = state.reflowing(from: [.left, .center, .right], to: [.topLeft, .topRight])
+
+        XCTAssertEqual(reflowed.windows(in: .topLeft), ["a"])
+        XCTAssertEqual(reflowed.windows(in: .topRight), ["b", "c"])
+        XCTAssertEqual(reflowed.windows(in: .left), [])
+        XCTAssertEqual(reflowed.windows(in: .center), [])
+        XCTAssertEqual(reflowed.windows(in: .right), [])
+    }
+
+    func testFilteringToLayoutRolesDropsWindowsWithoutRememberedTargetRole() {
+        var state = ColumnStackState()
+        state.assign("left-window", to: .left)
+        state.assign("center-window", to: .center)
+        state.assign("right-window", to: .right)
+
+        let filtered = state.filtered(to: [.left, .right])
+
+        XCTAssertEqual(filtered.windows(in: .left), ["left-window"])
+        XCTAssertEqual(filtered.windows(in: .right), ["right-window"])
+        XCTAssertEqual(filtered.windows(in: .center), [])
+        XCTAssertFalse(filtered.orderedWindowIDs(preferredRoles: [.left, .right]).contains("center-window"))
+    }
 }

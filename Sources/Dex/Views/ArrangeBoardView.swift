@@ -31,6 +31,31 @@ private func modeSlotNumber(forKeyCode keyCode: UInt16) -> Int? {
     }
 }
 
+private func layoutSlotNumber(forKeyCode keyCode: UInt16) -> Int? {
+    switch keyCode {
+    case 18: 1
+    case 19: 2
+    case 20: 3
+    case 21: 4
+    case 23: 5
+    case 22: 6
+    case 26: 7
+    case 28: 8
+    default: nil
+    }
+}
+
+private func boardLayoutShortcutOptions() -> [(slot: Int, kind: BoardLayoutKind)] {
+    BoardLayoutKind.shortcutSlots.compactMap { slot in
+        guard let kind = BoardLayoutKind.shortcutKind(for: slot) else { return nil }
+        return (slot, kind)
+    }
+}
+
+private func usesDefaultShelfTreatment(_ kind: BoardLayoutKind) -> Bool {
+    kind == .threeColumn || kind == .wideCenter
+}
+
 private enum BoardSelection: Equatable {
     case column(ColumnRole)
     case assigned(ColumnRole, String)
@@ -148,20 +173,17 @@ struct ArrangeBoardView: View {
     var body: some View {
         GeometryReader { geometry in
             let visibleLocalRect = display.localRect(for: display.visibleFrame)
-            let boardGutter = display.grid.gutter
+            let grid = model.grid(for: display)
+            let layoutRoles = grid.roles
             let metrics = layoutMetrics(for: visibleLocalRect)
-            let bottomShelfHeight = metrics.bottomShelfHeight
             let activeModes = model.activeModes(on: display)
-            let bottomRowHeight = activeModes.isEmpty ? boardRunningAppsRowHeight : boardCombinedShelfRowHeight
-            let openWindowsHeight = max(0, bottomShelfHeight - boardGutter - bottomRowHeight)
-            let centerStackHeight = metrics.centerStackHeight
             let unassignedWindows = model.unassignedWindows(on: display)
             let runningApps = model.runningApplicationsWithoutVisibleWindows(on: display)
             let ownsBoardInput = model.isDisplayActive(display)
-            let bottomSplit = bottomShelfSplit(
-                totalWidth: display.localRect(for: display.grid.rect(for: .center)).width,
-                gutter: boardGutter,
-                hasActiveModes: !activeModes.isEmpty
+            let shelfRects = bottomShelfRects(
+                for: visibleLocalRect,
+                grid: grid,
+                unassignedCount: unassignedWindows.count
             )
 
             ZStack(alignment: .topLeading) {
@@ -173,154 +195,119 @@ struct ArrangeBoardView: View {
                     .opacity(0.86)
                     .ignoresSafeArea()
 
-                HStack(alignment: .top, spacing: boardGutter) {
-                    ForEach(ColumnRole.allCases) { role in
-                        let localRect = display.localRect(for: display.grid.rect(for: role))
+                ForEach(layoutRoles) { role in
+                    let localRect = boardRoleRect(
+                        for: role,
+                        visibleLocalRect: visibleLocalRect,
+                        metrics: metrics,
+                        grid: grid
+                    )
 
-                        if role == .center {
-                            VStack(alignment: .leading, spacing: boardGutter) {
-                                ColumnDropZone(
-                                    display: display,
-                                    role: role,
-                                    size: CGSize(width: localRect.width, height: centerStackHeight),
-                                    selection: selection,
-                                    isDropTarget: hoveredRole == role,
-                                    isDragging: draggedWindowID != nil,
-                                    onColumnClicked: {
-                                        activeColumnRole = role
-                                        selection = .column(role)
-                                    },
-                                    onCardDragChanged: { windowID, screenPoint in
-                                        updateDragHover(windowID: windowID, screenPoint: screenPoint)
-                                    },
-                                    onCardDragEnded: { windowID, screenPoint in
-                                        draggedWindowID = nil
-                                        hoveredRole = nil
-                                        let targetRole = display.grid.nearestRole(to: screenPoint)
-                                        activeColumnRole = targetRole
-                                        selection = .assigned(targetRole, windowID)
-                                        model.assign(windowID: windowID, at: screenPoint)
-                                    },
-                                    onCardClicked: { windowID in
-                                        activeColumnRole = role
-                                        selection = .assigned(role, windowID)
-                                        model.selectBoardWindow(windowID: windowID)
-                                    },
-                                    onCardDoubleClicked: { windowID in
-                                        model.activateBoardWindow(windowID: windowID)
-                                    }
-                                )
-                                .environmentObject(model)
+                    ColumnDropZone(
+                        display: display,
+                        role: role,
+                        size: CGSize(width: localRect.width, height: localRect.height),
+                        selection: selection,
+                        isDropTarget: hoveredRole == role,
+                        isDragging: draggedWindowID != nil,
+                        onColumnClicked: {
+                            activeColumnRole = role
+                            selection = .column(role)
+                        },
+                        onCardDragChanged: { windowID, screenPoint in
+                            updateDragHover(windowID: windowID, screenPoint: screenPoint)
+                        },
+                        onCardDragEnded: { windowID, screenPoint in
+                            draggedWindowID = nil
+                            hoveredRole = nil
+                            let targetRole = grid.nearestRole(to: screenPoint)
+                            activeColumnRole = targetRole
+                            selection = .assigned(targetRole, windowID)
+                            model.assign(windowID: windowID, at: screenPoint)
+                        },
+                        onCardClicked: { windowID in
+                            activeColumnRole = role
+                            selection = .assigned(role, windowID)
+                            model.selectBoardWindow(windowID: windowID)
+                        },
+                        onCardDoubleClicked: { windowID in
+                            model.activateBoardWindow(windowID: windowID)
+                        }
+                    )
+                    .environmentObject(model)
+                    .position(x: localRect.midX, y: localRect.midY)
+                    .zIndex(1)
+                }
 
-                                UnassignedWindowStrip(
-                                    windows: unassignedWindows,
-                                    size: CGSize(width: localRect.width, height: openWindowsHeight),
-                                    selection: selection,
-                                    isAreaSelected: selection?.isOpenWindowsAreaSelected == true,
-                                    onCardDragChanged: { windowID, screenPoint in
-                                        updateDragHover(windowID: windowID, screenPoint: screenPoint)
-                                    },
-                                    onCardDragEnded: { windowID, screenPoint in
-                                        draggedWindowID = nil
-                                        hoveredRole = nil
-                                        let targetRole = display.grid.nearestRole(to: screenPoint)
-                                        activeColumnRole = targetRole
-                                        selection = .assigned(targetRole, windowID)
-                                        model.assign(windowID: windowID, at: screenPoint)
-                                    },
-                                    onCardClicked: { windowID in
-                                        selection = .unassigned(windowID)
-                                        model.selectBoardWindow(windowID: windowID)
-                                    },
-                                    onCardDoubleClicked: { windowID in
-                                        model.activateBoardWindow(windowID: windowID)
-                                    }
-                                )
+                UnassignedWindowStrip(
+                    windows: unassignedWindows,
+                    size: CGSize(width: shelfRects.openWindows.width, height: shelfRects.openWindows.height),
+                    selection: selection,
+                    isAreaSelected: selection?.isOpenWindowsAreaSelected == true,
+                    onCardDragChanged: { windowID, screenPoint in
+                        updateDragHover(windowID: windowID, screenPoint: screenPoint)
+                    },
+                    onCardDragEnded: { windowID, screenPoint in
+                        draggedWindowID = nil
+                        hoveredRole = nil
+                        let targetRole = grid.nearestRole(to: screenPoint)
+                        activeColumnRole = targetRole
+                        selection = .assigned(targetRole, windowID)
+                        model.assign(windowID: windowID, at: screenPoint)
+                    },
+                    onCardClicked: { windowID in
+                        selection = .unassigned(windowID)
+                        model.selectBoardWindow(windowID: windowID)
+                    },
+                    onCardDoubleClicked: { windowID in
+                        model.activateBoardWindow(windowID: windowID)
+                    }
+                )
+                .position(x: shelfRects.openWindows.midX, y: shelfRects.openWindows.midY)
+                .zIndex(1)
 
-                                HStack(spacing: boardGutter) {
-                                    RunningAppSwitcherStrip(
-                                        apps: runningApps,
-                                        size: CGSize(width: bottomSplit.runningWidth, height: bottomRowHeight),
-                                        selection: selection,
-                                        isAreaSelected: selection?.isRunningAppsAreaSelected == true,
-                                        onAreaClicked: {
-                                            selection = .runningAppsArea
-                                        },
-                                        onAppClicked: { item in
-                                            selection = .runningApplication(item.id)
-                                            model.selectRunningApplication(item)
-                                        },
-                                        onAppDoubleClicked: { item in
-                                            selection = .runningApplication(item.id)
-                                            Task {
-                                                await model.openRunningApplication(item, in: activeRole(), displayID: display.id)
-                                            }
-                                        }
-                                    )
-
-                                    if !activeModes.isEmpty {
-                                        ActiveModeStrip(
-                                            modes: activeModes,
-                                            size: CGSize(width: bottomSplit.activeModesWidth, height: bottomRowHeight),
-                                            selection: selection,
-                                            isAreaSelected: selection?.isActiveModesAreaSelected == true,
-                                            onAreaClicked: {
-                                                selection = .activeModesArea
-                                            },
-                                            onModeClicked: { instance in
-                                                selection = .activeMode(instance.id)
-                                            },
-                                            onModeDoubleClicked: { instance in
-                                                selection = .activeMode(instance.id)
-                                                Task { await model.raiseModeInstance(id: instance.id) }
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                            .frame(width: localRect.width, height: metrics.columnsHeight, alignment: .top)
-                        } else {
-                            ColumnDropZone(
-                                display: display,
-                                role: role,
-                                size: CGSize(width: localRect.width, height: metrics.columnsHeight),
-                                selection: selection,
-                                isDropTarget: hoveredRole == role,
-                                isDragging: draggedWindowID != nil,
-                                onColumnClicked: {
-                                    activeColumnRole = role
-                                    selection = .column(role)
-                                },
-                                onCardDragChanged: { windowID, screenPoint in
-                                    updateDragHover(windowID: windowID, screenPoint: screenPoint)
-                                },
-                                onCardDragEnded: { windowID, screenPoint in
-                                    draggedWindowID = nil
-                                    hoveredRole = nil
-                                    let targetRole = display.grid.nearestRole(to: screenPoint)
-                                    activeColumnRole = targetRole
-                                    selection = .assigned(targetRole, windowID)
-                                    model.assign(windowID: windowID, at: screenPoint)
-                                },
-                                onCardClicked: { windowID in
-                                    activeColumnRole = role
-                                    selection = .assigned(role, windowID)
-                                    model.selectBoardWindow(windowID: windowID)
-                                },
-                                onCardDoubleClicked: { windowID in
-                                    model.activateBoardWindow(windowID: windowID)
-                                }
-                            )
-                            .environmentObject(model)
+                RunningAppSwitcherStrip(
+                    apps: runningApps,
+                    size: CGSize(width: shelfRects.runningApps.width, height: shelfRects.runningApps.height),
+                    selection: selection,
+                    isAreaSelected: selection?.isRunningAppsAreaSelected == true,
+                    onAreaClicked: {
+                        selection = .runningAppsArea
+                    },
+                    onAppClicked: { item in
+                        selection = .runningApplication(item.id)
+                        model.selectRunningApplication(item)
+                    },
+                    onAppDoubleClicked: { item in
+                        selection = .runningApplication(item.id)
+                        Task {
+                            await model.openRunningApplication(item, in: activeRole(), displayID: display.id)
                         }
                     }
-                }
-                .frame(width: visibleLocalRect.width, height: metrics.columnsHeight, alignment: .topLeading)
-                .offset(
-                    x: visibleLocalRect.minX,
-                    y: visibleLocalRect.minY + metrics.headerHeight + boardGutter
                 )
+                .position(x: shelfRects.runningApps.midX, y: shelfRects.runningApps.midY)
                 .zIndex(1)
+
+                if let activeModesRect = shelfRects.activeModes {
+                    ActiveModeStrip(
+                        modes: activeModes,
+                        size: CGSize(width: activeModesRect.width, height: activeModesRect.height),
+                        selection: selection,
+                        isAreaSelected: selection?.isActiveModesAreaSelected == true,
+                        onAreaClicked: {
+                            selection = .activeModesArea
+                        },
+                        onModeClicked: { instance in
+                            selection = .activeMode(instance.id)
+                        },
+                        onModeDoubleClicked: { instance in
+                            selection = .activeMode(instance.id)
+                            Task { await model.raiseModeInstance(id: instance.id) }
+                        }
+                    )
+                    .position(x: activeModesRect.midX, y: activeModesRect.midY)
+                    .zIndex(1)
+                }
 
                 if let hudText = model.hudText {
                     HUDView(text: hudText)
@@ -352,6 +339,7 @@ struct ArrangeBoardView: View {
                         selectedIndex: $paletteSelectionIndex,
                         onMove: movePaletteSelection,
                         onSubmit: openSelectedPaletteResult,
+                        onLayoutShortcut: applyLayoutShortcutFromPalette,
                         onCancel: closePalette
                     )
                     .zIndex(40)
@@ -455,10 +443,14 @@ struct ArrangeBoardView: View {
     }
 
     private var selectionItemIDs: [String] {
-        ColumnRole.allCases.flatMap { windows(for: $0).map { "window:\($0.id)" } }
+        layoutRoles.flatMap { windows(for: $0).map { "window:\($0.id)" } }
             + model.unassignedWindows(on: display).map { "window:\($0.id)" }
             + runningApps.map { "app:\($0.id)" }
             + activeModes.map { "mode:\($0.id)" }
+    }
+
+    private var layoutRoles: [ColumnRole] {
+        model.layoutRoles(for: display)
     }
 
     private var runningApps: [RunningApplicationItem] {
@@ -481,7 +473,8 @@ struct ArrangeBoardView: View {
     }
 
     private var paletteResults: [BoardPaletteResult] {
-        (model.savedModes.isEmpty ? [] : [.manageModes]) +
+        boardLayoutShortcutOptions().map { .layout($0.kind, slot: $0.slot) } +
+            (model.savedModes.isEmpty ? [] : [.manageModes]) +
             model.savedModes.map(BoardPaletteResult.savedMode) +
             diaTabPaletteResults() +
             paletteApplications.map(BoardPaletteResult.application)
@@ -493,7 +486,7 @@ struct ArrangeBoardView: View {
 
     private func diaTabPaletteResults() -> [BoardPaletteResult] {
         var seenWindowIDs: Set<String> = []
-        let displayWindows = ColumnRole.allCases.flatMap { windows(for: $0) } +
+        let displayWindows = layoutRoles.flatMap { windows(for: $0) } +
             model.unassignedWindows(on: display)
 
         return displayWindows.flatMap { window -> [BoardPaletteResult] in
@@ -513,7 +506,7 @@ struct ArrangeBoardView: View {
             draggedWindowID = windowID
         }
 
-        let role = display.grid.nearestRole(to: screenPoint)
+        let role = model.grid(for: display).nearestRole(to: screenPoint)
         if hoveredRole != role {
             hoveredRole = role
         }
@@ -526,7 +519,7 @@ struct ArrangeBoardView: View {
         centerStackHeight: CGFloat
     ) {
         let headerHeight: CGFloat = 0
-        let boardGutter = display.grid.gutter
+        let boardGutter = model.grid(for: display).gutter
         let columnsHeight = max(260, visibleLocalRect.height - headerHeight - boardGutter)
         let bottomShelfHeight = floor(columnsHeight * 0.35)
         let centerStackHeight = max(160, columnsHeight - boardGutter - bottomShelfHeight)
@@ -552,28 +545,93 @@ struct ArrangeBoardView: View {
         return (max(0, totalWidth - activeWidth - gutter), max(0, activeWidth))
     }
 
+    private func boardRoleRect(
+        for role: ColumnRole,
+        visibleLocalRect: CGRect,
+        metrics: (
+            headerHeight: CGFloat,
+            columnsHeight: CGFloat,
+            bottomShelfHeight: CGFloat,
+            centerStackHeight: CGFloat
+        ),
+        grid: GridLayout
+    ) -> CGRect {
+        let screenLocalRect = display.localRect(for: grid.rect(for: role))
+        let topY = visibleLocalRect.minY + metrics.headerHeight + grid.gutter
+
+        if usesDefaultShelfTreatment(grid.kind) {
+            let height = role == .center ? metrics.centerStackHeight : metrics.columnsHeight
+            return CGRect(
+                x: screenLocalRect.minX,
+                y: topY,
+                width: screenLocalRect.width,
+                height: height
+            )
+        }
+
+        let assignedArea = CGRect(
+            x: visibleLocalRect.minX,
+            y: topY,
+            width: visibleLocalRect.width,
+            height: metrics.columnsHeight
+        )
+        let widthScale = visibleLocalRect.width == 0 ? 1 : assignedArea.width / visibleLocalRect.width
+        let heightScale = visibleLocalRect.height == 0 ? 1 : assignedArea.height / visibleLocalRect.height
+        return CGRect(
+            x: assignedArea.minX + (screenLocalRect.minX - visibleLocalRect.minX) * widthScale,
+            y: assignedArea.minY + (screenLocalRect.minY - visibleLocalRect.minY) * heightScale,
+            width: screenLocalRect.width * widthScale,
+            height: screenLocalRect.height * heightScale
+        ).integral
+    }
+
     private func bottomShelfRects(
-        for visibleLocalRect: CGRect
+        for visibleLocalRect: CGRect,
+        grid: GridLayout,
+        unassignedCount: Int
     ) -> (openWindows: CGRect, runningApps: CGRect, activeModes: CGRect?) {
-        let boardGutter = display.grid.gutter
+        let boardGutter = grid.gutter
         let metrics = layoutMetrics(for: visibleLocalRect)
-        let centerRect = display.localRect(for: display.grid.rect(for: .center))
+        let useDefaultShelf = usesDefaultShelfTreatment(grid.kind)
+        let shelfWidthRect: CGRect
+        if useDefaultShelf {
+            shelfWidthRect = display.localRect(for: grid.rect(for: .center))
+        } else {
+            let width = min(960, max(460, floor(visibleLocalRect.width * 0.5)))
+            shelfWidthRect = CGRect(
+                x: visibleLocalRect.midX - width / 2,
+                y: visibleLocalRect.minY,
+                width: min(width, visibleLocalRect.width),
+                height: visibleLocalRect.height
+            )
+        }
         let hasActiveModes = !activeModes.isEmpty
-        let bottomRowHeight = hasActiveModes ? boardCombinedShelfRowHeight : boardRunningAppsRowHeight
-        let openWindowsHeight = max(0, metrics.bottomShelfHeight - boardGutter - bottomRowHeight)
+        let baseBottomRowHeight = hasActiveModes ? boardCombinedShelfRowHeight : boardRunningAppsRowHeight
+        let bottomRowHeight = useDefaultShelf
+            ? baseBottomRowHeight
+            : max(baseBottomRowHeight, hasActiveModes ? 108 : 102)
+        let openWindowsHeight = useDefaultShelf
+            ? max(0, metrics.bottomShelfHeight - boardGutter - bottomRowHeight)
+            : (unassignedCount == 0 ? 92 : min(190, max(140, floor(visibleLocalRect.height * 0.17))))
+        let openWindowsY = useDefaultShelf
+            ? visibleLocalRect.minY + metrics.headerHeight + boardGutter + metrics.centerStackHeight + boardGutter
+            : max(
+                visibleLocalRect.minY + boardGutter,
+                visibleLocalRect.maxY - boardGutter - bottomRowHeight - boardGutter - openWindowsHeight
+            )
         let openWindowsRect = CGRect(
-            x: centerRect.minX,
-            y: visibleLocalRect.minY + metrics.headerHeight + boardGutter + metrics.centerStackHeight + boardGutter,
-            width: centerRect.width,
+            x: shelfWidthRect.minX,
+            y: openWindowsY,
+            width: shelfWidthRect.width,
             height: openWindowsHeight
         )
         let split = bottomShelfSplit(
-            totalWidth: centerRect.width,
+            totalWidth: shelfWidthRect.width,
             gutter: boardGutter,
             hasActiveModes: hasActiveModes
         )
         let runningAppsRect = CGRect(
-            x: centerRect.minX,
+            x: shelfWidthRect.minX,
             y: openWindowsRect.maxY + boardGutter,
             width: split.runningWidth,
             height: bottomRowHeight
@@ -606,13 +664,13 @@ struct ArrangeBoardView: View {
             return
         }
 
-        if let center = windows(for: .center).first {
+        if layoutRoles.contains(.center), let center = windows(for: .center).first {
             activeColumnRole = .center
             selection = .assigned(.center, center.id)
             return
         }
 
-        for role in ColumnRole.allCases {
+        for role in layoutRoles {
             if let window = windows(for: role).first {
                 activeColumnRole = role
                 selection = .assigned(role, window.id)
@@ -635,7 +693,9 @@ struct ArrangeBoardView: View {
             return
         }
 
-        selection = .column(.center)
+        let fallbackRole = layoutRoles.first ?? .center
+        activeColumnRole = fallbackRole
+        selection = .column(fallbackRole)
     }
 
     private func handleKeyDown(_ event: NSEvent) -> Bool {
@@ -719,6 +779,14 @@ struct ArrangeBoardView: View {
             return false
         }
 
+        if !flags.contains(.shift),
+           let slot = layoutSlot(for: event),
+           let role = model.applyLayoutShortcut(slot, displayID: display.id) {
+            activeColumnRole = role
+            selection = .column(role)
+            return true
+        }
+
         switch key {
         case "/":
             showPalette()
@@ -752,7 +820,7 @@ struct ArrangeBoardView: View {
             moveSelectedItem(to: nextRole(from: activeRole()))
             return true
         case 126:
-            moveSelectedItem(to: .center)
+            moveSelectedItem(to: preferredRoleForVerticalMove())
             return true
         case 125:
             if let windowID = selection?.windowID {
@@ -781,7 +849,7 @@ struct ArrangeBoardView: View {
 
     private func switchFocusArea(reverse: Bool = false) {
         ensureSelection()
-        let areas = BoardFocusArea.allCases
+        let areas = BoardFocusArea.allCases(for: layoutRoles, includesActiveModes: !activeModes.isEmpty)
         let current = currentFocusArea()
         let currentIndex = areas.firstIndex(of: current) ?? 1
         let nextIndex = reverse
@@ -791,10 +859,10 @@ struct ArrangeBoardView: View {
     }
 
     private func currentFocusArea() -> BoardFocusArea {
-        guard let selection else { return .center }
+        guard let selection else { return .role(activeColumnRole) }
         switch selection {
         case .column(let role), .assigned(let role, _):
-            return BoardFocusArea(role: role)
+            return .role(role)
         case .unassignedArea, .unassigned:
             return .openWindows
         case .runningAppsArea, .runningApplication:
@@ -868,31 +936,29 @@ struct ArrangeBoardView: View {
             }
     }
 
-    private func visualGridColumnCount(for role: ColumnRole) -> Int {
-        let localRect = display.localRect(for: display.grid.rect(for: role))
-        let availableWidth = max(180, localRect.width - 36)
-        let minimumWidth: CGFloat = availableWidth < 640 ? min(availableWidth, 340) : 360
-        return max(1, Int((availableWidth + 22) / (minimumWidth + 22)))
-    }
-
     private func visualNavigationCandidates() -> [BoardNavigationCandidate] {
         let visibleLocalRect = display.localRect(for: display.visibleFrame)
-        let boardGutter = display.grid.gutter
+        let grid = model.grid(for: display)
         let metrics = layoutMetrics(for: visibleLocalRect)
-        let shelfRects = bottomShelfRects(for: visibleLocalRect)
-        let columnsTopY = visibleLocalRect.minY + metrics.headerHeight + boardGutter
+        let shelfRects = bottomShelfRects(
+            for: visibleLocalRect,
+            grid: grid,
+            unassignedCount: model.unassignedWindows(on: display).count
+        )
 
         var candidates: [BoardNavigationCandidate] = []
-        for role in ColumnRole.allCases {
-            let roleRect = display.localRect(for: display.grid.rect(for: role))
-            let zoneHeight = role == .center ? metrics.centerStackHeight : metrics.columnsHeight
-            let zoneRect = CGRect(
-                x: roleRect.minX,
-                y: columnsTopY,
-                width: roleRect.width,
-                height: zoneHeight
+        for role in layoutRoles {
+            candidates.append(
+                contentsOf: navigationCandidatesForAssignedWindows(
+                    role: role,
+                    zoneRect: boardRoleRect(
+                        for: role,
+                        visibleLocalRect: visibleLocalRect,
+                        metrics: metrics,
+                        grid: grid
+                    )
+                )
             )
-            candidates.append(contentsOf: navigationCandidatesForAssignedWindows(role: role, zoneRect: zoneRect))
         }
 
         candidates.append(contentsOf: navigationCandidatesForUnassignedWindows(zoneRect: shelfRects.openWindows))
@@ -1025,30 +1091,48 @@ struct ArrangeBoardView: View {
 
         switch selection {
         case .column(let role):
-            let rect = display.localRect(for: display.grid.rect(for: role))
             let visibleLocalRect = display.localRect(for: display.visibleFrame)
+            let grid = model.grid(for: display)
             let metrics = layoutMetrics(for: visibleLocalRect)
+            let rect = boardRoleRect(
+                for: role,
+                visibleLocalRect: visibleLocalRect,
+                metrics: metrics,
+                grid: grid
+            )
             return CGPoint(
                 x: rect.midX,
-                y: visibleLocalRect.minY + metrics.headerHeight + display.grid.gutter + metrics.columnsHeight / 2
+                y: rect.midY
             )
         case .unassignedArea:
             let visibleLocalRect = display.localRect(for: display.visibleFrame)
-            let shelfRects = bottomShelfRects(for: visibleLocalRect)
+            let shelfRects = bottomShelfRects(
+                for: visibleLocalRect,
+                grid: model.grid(for: display),
+                unassignedCount: model.unassignedWindows(on: display).count
+            )
             return CGPoint(
                 x: shelfRects.openWindows.midX,
                 y: shelfRects.openWindows.midY
             )
         case .runningAppsArea:
             let visibleLocalRect = display.localRect(for: display.visibleFrame)
-            let shelfRects = bottomShelfRects(for: visibleLocalRect)
+            let shelfRects = bottomShelfRects(
+                for: visibleLocalRect,
+                grid: model.grid(for: display),
+                unassignedCount: model.unassignedWindows(on: display).count
+            )
             return CGPoint(
                 x: shelfRects.runningApps.midX,
                 y: shelfRects.runningApps.midY
             )
         case .activeModesArea:
             let visibleLocalRect = display.localRect(for: display.visibleFrame)
-            let shelfRects = bottomShelfRects(for: visibleLocalRect)
+            let shelfRects = bottomShelfRects(
+                for: visibleLocalRect,
+                grid: model.grid(for: display),
+                unassignedCount: model.unassignedWindows(on: display).count
+            )
             guard let activeModesRect = shelfRects.activeModes else {
                 return CGPoint(x: shelfRects.runningApps.midX, y: shelfRects.runningApps.midY)
             }
@@ -1241,6 +1325,8 @@ struct ArrangeBoardView: View {
         let index = min(paletteSelectionIndex, results.count - 1)
 
         switch results[index] {
+        case .layout(_, let slot):
+            applyLayoutShortcutFromPalette(slot)
         case .manageModes:
             closePalette()
             openWindow(id: "main")
@@ -1261,6 +1347,14 @@ struct ArrangeBoardView: View {
         case .diaTab(let tab, _, _):
             closePalette()
             model.activateBoardDiaTab(tabID: tab.id)
+        }
+    }
+
+    private func applyLayoutShortcutFromPalette(_ slot: Int) {
+        closePalette()
+        if let role = model.applyLayoutShortcut(slot, displayID: display.id) {
+            activeColumnRole = role
+            selection = .column(role)
         }
     }
 
@@ -1323,6 +1417,10 @@ struct ArrangeBoardView: View {
         modeSlotNumber(forKeyCode: event.keyCode)
     }
 
+    private func layoutSlot(for event: NSEvent) -> Int? {
+        layoutSlotNumber(forKeyCode: event.keyCode)
+    }
+
     private func handleModeConfirmationKeyDown(_ event: NSEvent) -> Bool {
         guard case .confirming(let mode, _, _) = model.modeLaunchConfirmation else {
             return false
@@ -1364,8 +1462,8 @@ struct ArrangeBoardView: View {
     }
 
     private func handleWindowEdgeMove(direction: DisplaySwitchDirection) -> Bool {
-        let edgeRole: ColumnRole = direction == .left ? .left : .right
-        guard activeRole() == edgeRole,
+        let grid = model.grid(for: display)
+        guard grid.isEdgeRole(activeRole(), direction: direction),
               let windowID = selection?.windowID else {
             return false
         }
@@ -1420,7 +1518,7 @@ struct ArrangeBoardView: View {
     /// falling back to the unassigned shelf. Used to recover the tour's move-column step
     /// when the selection isn't a window.
     private func firstMovableWindowID() -> String? {
-        for role in ColumnRole.allCases {
+        for role in layoutRoles {
             if let window = windows(for: role).first {
                 return window.id
             }
@@ -1442,19 +1540,19 @@ struct ArrangeBoardView: View {
     }
 
     private func nextRole(from role: ColumnRole) -> ColumnRole {
-        switch role {
-        case .left: .center
-        case .center: .right
-        case .right: .right
-        }
+        model.grid(for: display).nextRole(after: role)
     }
 
     private func previousRole(from role: ColumnRole) -> ColumnRole {
-        switch role {
-        case .left: .left
-        case .center: .left
-        case .right: .center
+        model.grid(for: display).previousRole(before: role)
+    }
+
+    private func preferredRoleForVerticalMove() -> ColumnRole {
+        let roles = layoutRoles
+        if roles.contains(.center) {
+            return .center
         }
+        return roles.first ?? .center
     }
 
 }
@@ -1562,6 +1660,8 @@ private struct ColumnDropZone: View {
         case .left: "sidebar.left"
         case .center: "rectangle"
         case .right: "sidebar.right"
+        case .topLeft, .topRight: "rectangle.topthird.inset.filled"
+        case .bottomLeft, .bottomRight: "rectangle.bottomthird.inset.filled"
         }
     }
 }
@@ -2479,7 +2579,7 @@ private struct SaveModeOverlay: View {
             Spacer(minLength: 12)
 
             HStack(spacing: 8) {
-                ForEach(ColumnRole.allCases) { role in
+                ForEach(preview.layoutKind.roles) { role in
                     ModeCaptureRoleGroup(
                         role: role,
                         windows: preview.windowsByRole[role, default: []]
@@ -2497,7 +2597,7 @@ private struct SaveModeOverlay: View {
     }
 
     private var capturedWindows: [SavedModeWindow] {
-        ColumnRole.allCases.flatMap { preview.windowsByRole[$0, default: []] }
+        preview.layoutKind.roles.flatMap { preview.windowsByRole[$0, default: []] }
     }
 
 }
@@ -2764,6 +2864,7 @@ private struct BoardPaletteOverlay: View {
     @Binding var selectedIndex: Int
     let onMove: (Int) -> Void
     let onSubmit: () -> Void
+    let onLayoutShortcut: (Int) -> Void
     let onCancel: () -> Void
 
     var body: some View {
@@ -2777,6 +2878,11 @@ private struct BoardPaletteOverlay: View {
 
                 Divider()
                     .overlay(.white.opacity(0.18))
+
+                layoutShortcutBar
+
+                Divider()
+                    .overlay(.white.opacity(0.14))
 
                 if BoardPaletteSearch.isShowingShortcutHelp(query: query) {
                     shortcutHelpContent
@@ -2822,6 +2928,26 @@ private struct BoardPaletteOverlay: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
+    }
+
+    private var layoutShortcutBar: some View {
+        LazyVGrid(
+            columns: Array(repeating: GridItem(.flexible(), spacing: 7), count: 4),
+            alignment: .center,
+            spacing: 7
+        ) {
+            ForEach(boardLayoutShortcutOptions(), id: \.slot) { option in
+                LayoutShortcutChip(
+                    slot: option.slot,
+                    kind: option.kind,
+                    onSelect: {
+                        onLayoutShortcut(option.slot)
+                    }
+                )
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
     }
 
     private var shortcutHelpContent: some View {
@@ -2985,6 +3111,170 @@ private struct PaletteSearchTextField: NSViewRepresentable {
     }
 }
 
+private struct LayoutShortcutChip: View {
+    let slot: Int
+    let kind: BoardLayoutKind
+    let onSelect: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 5) {
+                Text("\(slot)")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .frame(width: 17, height: 17)
+                    .background(.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+
+                LayoutMiniPreview(kind: kind)
+                    .frame(width: 32, height: 20)
+
+                Text(shortName)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.8))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 6)
+            .background(.white.opacity(isHovered ? 0.14 : 0.07), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .strokeBorder(.white.opacity(isHovered ? 0.26 : 0.12), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .animation(.spring(response: 0.20, dampingFraction: 0.82), value: isHovered)
+        .help("Layout \(slot): \(kind.displayName)")
+    }
+
+    private var shortName: String {
+        switch kind {
+        case .wideCenter: "Wide"
+        case .threeColumn: "3 Cols"
+        case .halves: "Halves"
+        case .twoByTwo: "2 x 2"
+        case .leftMainRightStack: "L + Stack"
+        case .leftStackRightMain: "Stack + R"
+        case .leftNarrowCenter: "Narrow L"
+        case .centerRightNarrow: "Narrow R"
+        }
+    }
+}
+
+private struct LayoutMiniPreview: View {
+    let kind: BoardLayoutKind
+
+    var body: some View {
+        GeometryReader { proxy in
+            let rects = previewRects(in: proxy.size)
+
+            ZStack {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(.white.opacity(0.10))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .strokeBorder(.white.opacity(0.48), lineWidth: 1)
+                    }
+
+                ForEach(Array(rects.enumerated()), id: \.offset) { _, rect in
+                    RoundedRectangle(cornerRadius: 2.2, style: .continuous)
+                        .fill(.white.opacity(0.76))
+                        .frame(width: rect.width, height: rect.height)
+                        .position(x: rect.midX, y: rect.midY)
+                }
+            }
+        }
+    }
+
+    private func previewRects(in size: CGSize) -> [CGRect] {
+        let gutter: CGFloat = 2
+        let width = max(1, size.width)
+        let height = max(1, size.height)
+        let body = CGRect(x: 1, y: 1, width: max(1, width - 2), height: max(1, height - 2))
+
+        switch kind {
+        case .threeColumn:
+            return threeColumnRects(in: body, sideRatio: 0.25, centerRatio: 0.50, gutter: gutter)
+        case .wideCenter:
+            return threeColumnRects(in: body, sideRatio: 0.18, centerRatio: 0.64, gutter: gutter)
+        case .halves:
+            let halfWidth = floor((body.width - gutter) / 2)
+            return [
+                CGRect(x: body.minX, y: body.minY, width: halfWidth, height: body.height),
+                CGRect(x: body.minX + halfWidth + gutter, y: body.minY, width: body.width - halfWidth - gutter, height: body.height)
+            ]
+        case .twoByTwo:
+            let halfWidth = floor((body.width - gutter) / 2)
+            let halfHeight = floor((body.height - gutter) / 2)
+            return [
+                CGRect(x: body.minX, y: body.minY, width: halfWidth, height: halfHeight),
+                CGRect(x: body.minX + halfWidth + gutter, y: body.minY, width: body.width - halfWidth - gutter, height: halfHeight),
+                CGRect(x: body.minX, y: body.minY + halfHeight + gutter, width: halfWidth, height: body.height - halfHeight - gutter),
+                CGRect(x: body.minX + halfWidth + gutter, y: body.minY + halfHeight + gutter, width: body.width - halfWidth - gutter, height: body.height - halfHeight - gutter)
+            ]
+        case .leftMainRightStack:
+            return mainAndStackRects(in: body, mainOnLeft: true, gutter: gutter)
+        case .leftStackRightMain:
+            return mainAndStackRects(in: body, mainOnLeft: false, gutter: gutter)
+        case .leftNarrowCenter:
+            return twoColumnRects(in: body, narrowOnLeft: true, gutter: gutter)
+        case .centerRightNarrow:
+            return twoColumnRects(in: body, narrowOnLeft: false, gutter: gutter)
+        }
+    }
+
+    private func threeColumnRects(
+        in body: CGRect,
+        sideRatio: CGFloat,
+        centerRatio: CGFloat,
+        gutter: CGFloat
+    ) -> [CGRect] {
+        let availableWidth = max(1, body.width - gutter * 2)
+        let sideWidth = floor(availableWidth * sideRatio)
+        let centerWidth = floor(availableWidth * centerRatio)
+        let rightWidth = max(1, availableWidth - sideWidth - centerWidth)
+        return [
+            CGRect(x: body.minX, y: body.minY, width: sideWidth, height: body.height),
+            CGRect(x: body.minX + sideWidth + gutter, y: body.minY, width: centerWidth, height: body.height),
+            CGRect(x: body.maxX - rightWidth, y: body.minY, width: rightWidth, height: body.height)
+        ]
+    }
+
+    private func mainAndStackRects(in body: CGRect, mainOnLeft: Bool, gutter: CGFloat) -> [CGRect] {
+        let halfWidth = floor((body.width - gutter) / 2)
+        let topHeight = floor((body.height - gutter) / 2)
+        let mainX = mainOnLeft ? body.minX : body.minX + halfWidth + gutter
+        let stackX = mainOnLeft ? body.minX + halfWidth + gutter : body.minX
+        let mainWidth = mainOnLeft ? halfWidth : body.width - halfWidth - gutter
+        let stackWidth = mainOnLeft ? body.width - halfWidth - gutter : halfWidth
+        return [
+            CGRect(x: mainX, y: body.minY, width: mainWidth, height: body.height),
+            CGRect(x: stackX, y: body.minY, width: stackWidth, height: topHeight),
+            CGRect(x: stackX, y: body.minY + topHeight + gutter, width: stackWidth, height: body.height - topHeight - gutter)
+        ]
+    }
+
+    private func twoColumnRects(in body: CGRect, narrowOnLeft: Bool, gutter: CGFloat) -> [CGRect] {
+        let narrowWidth = floor(max(1, body.width - gutter * 2) * 0.25)
+        let wideWidth = max(1, body.width - narrowWidth - gutter)
+        if narrowOnLeft {
+            return [
+                CGRect(x: body.minX, y: body.minY, width: narrowWidth, height: body.height),
+                CGRect(x: body.minX + narrowWidth + gutter, y: body.minY, width: wideWidth, height: body.height)
+            ]
+        }
+        return [
+            CGRect(x: body.minX, y: body.minY, width: wideWidth, height: body.height),
+            CGRect(x: body.minX + wideWidth + gutter, y: body.minY, width: narrowWidth, height: body.height)
+        ]
+    }
+}
+
 private struct BoardPaletteResultRow: View {
     let result: BoardPaletteResult
     let isSelected: Bool
@@ -3013,6 +3303,15 @@ private struct BoardPaletteResultRow: View {
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.white.opacity(0.72))
                     .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.white.opacity(0.10), in: Capsule())
+            }
+
+            if result.isLayoutShortcut {
+                Text("Layout")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .padding(.horizontal, 7)
                     .padding(.vertical, 4)
                     .background(.white.opacity(0.10), in: Capsule())
             }
@@ -3061,6 +3360,10 @@ private struct BoardPaletteResultRow: View {
     @ViewBuilder
     private var icon: some View {
         switch result {
+        case .layout(let kind, _):
+            LayoutMiniPreview(kind: kind)
+                .padding(.horizontal, 2)
+                .padding(.vertical, 7)
         case .manageModes:
             Image(systemName: "gearshape")
                 .font(.system(size: 23, weight: .semibold))

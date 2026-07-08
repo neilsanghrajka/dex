@@ -10,8 +10,9 @@ struct SnapOverlayView: View {
                 .fill(.black.opacity(0.12))
                 .ignoresSafeArea()
 
-            ForEach(ColumnRole.allCases) { role in
-                let localRect = display.localRect(for: display.grid.rect(for: role))
+            let grid = model.grid(for: display)
+            ForEach(grid.roles) { role in
+                let localRect = display.localRect(for: grid.rect(for: role))
                 let highlighted = model.hoveredSnapRole == role
 
                 ZStack {
@@ -45,6 +46,8 @@ struct SnapOverlayView: View {
         case .left: "sidebar.left"
         case .center: "rectangle"
         case .right: "sidebar.right"
+        case .topLeft, .topRight: "rectangle.topthird.inset.filled"
+        case .bottomLeft, .bottomRight: "rectangle.bottomthird.inset.filled"
         }
     }
 }
