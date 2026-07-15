@@ -1,8 +1,76 @@
 import AppKit
 import SwiftUI
 
-private let boardRunningAppsRowHeight: CGFloat = 88
-private let boardCombinedShelfRowHeight: CGFloat = 94
+private struct BoardLayoutProfile: Equatable {
+    let gridGutter: CGFloat
+    let sectionPadding: CGFloat
+    let sectionSpacing: CGFloat
+    let assignedRowSpacing: CGFloat
+    let assignedColumnSpacing: CGFloat
+    let cardTextSpacing: CGFloat
+    let unassignedHeightAllowance: CGFloat
+    let unassignedMinimumCardHeight: CGFloat
+    let unassignedMinimumCardWidth: CGFloat
+    let unassignedMaximumCardWidth: CGFloat
+    let horizontalCardSpacing: CGFloat
+    let runningAppsRowHeight: CGFloat
+    let combinedShelfRowHeight: CGFloat
+    let runningCardWidth: CGFloat
+    let runningCardSpacing: CGFloat
+    let iconSize: CGFloat
+    let iconPadding: CGFloat
+
+    static let fullScreen = BoardLayoutProfile(
+        gridGutter: 10,
+        sectionPadding: 18,
+        sectionSpacing: 12,
+        assignedRowSpacing: 18,
+        assignedColumnSpacing: 22,
+        cardTextSpacing: 8,
+        unassignedHeightAllowance: 96,
+        unassignedMinimumCardHeight: 120,
+        unassignedMinimumCardWidth: 220,
+        unassignedMaximumCardWidth: 380,
+        horizontalCardSpacing: 22,
+        runningAppsRowHeight: 88,
+        combinedShelfRowHeight: 94,
+        runningCardWidth: 82,
+        runningCardSpacing: 12,
+        iconSize: 38,
+        iconPadding: 7
+    )
+
+    static let compact = BoardLayoutProfile(
+        gridGutter: 10,
+        sectionPadding: 12,
+        sectionSpacing: 8,
+        assignedRowSpacing: 12,
+        assignedColumnSpacing: 12,
+        cardTextSpacing: 5,
+        unassignedHeightAllowance: 58,
+        unassignedMinimumCardHeight: 80,
+        unassignedMinimumCardWidth: 128,
+        unassignedMaximumCardWidth: 320,
+        horizontalCardSpacing: 12,
+        runningAppsRowHeight: 72,
+        combinedShelfRowHeight: 78,
+        runningCardWidth: 68,
+        runningCardSpacing: 8,
+        iconSize: 34,
+        iconPadding: 5
+    )
+}
+
+private struct BoardLayoutProfileKey: EnvironmentKey {
+    static let defaultValue = BoardLayoutProfile.fullScreen
+}
+
+private extension EnvironmentValues {
+    var boardLayoutProfile: BoardLayoutProfile {
+        get { self[BoardLayoutProfileKey.self] }
+        set { self[BoardLayoutProfileKey.self] = newValue }
+    }
+}
 
 private enum BoardNavigationDirection {
     case left
@@ -14,6 +82,34 @@ private enum BoardNavigationDirection {
 private struct BoardNavigationCandidate {
     let selection: BoardSelection
     let center: CGPoint
+}
+
+private enum BoardNavigationCoordinateSpace {
+    static let name = "DexBoardNavigation"
+}
+
+private struct BoardNavigationFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [BoardSelection: CGRect] = [:]
+
+    static func reduce(
+        value: inout [BoardSelection: CGRect],
+        nextValue: () -> [BoardSelection: CGRect]
+    ) {
+        value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
+    }
+}
+
+private extension View {
+    func boardNavigationFrame(_ selection: BoardSelection) -> some View {
+        background {
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: BoardNavigationFramePreferenceKey.self,
+                    value: [selection: proxy.frame(in: .named(BoardNavigationCoordinateSpace.name))]
+                )
+            }
+        }
+    }
 }
 
 private func modeSlotNumber(forKeyCode keyCode: UInt16) -> Int? {
@@ -56,7 +152,7 @@ private func usesDefaultShelfTreatment(_ kind: BoardLayoutKind) -> Bool {
     kind == .threeColumn || kind == .wideCenter
 }
 
-private enum BoardSelection: Equatable {
+private enum BoardSelection: Hashable {
     case column(ColumnRole)
     case assigned(ColumnRole, String)
     case unassignedArea
@@ -153,6 +249,7 @@ struct ArrangeBoardView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.openWindow) private var openWindow
     let display: DisplayInfo
+    let presentation: BoardPresentationStyle
     @State private var hoveredRole: ColumnRole?
     @State private var draggedWindowID: String?
     @State private var selection: BoardSelection?
@@ -169,10 +266,33 @@ struct ArrangeBoardView: View {
     @State private var isSaveModeVisible = false
     @State private var saveModeName = ""
     @State private var saveModeSelectionIndex = 0
+    @State private var navigationFrames: [BoardSelection: CGRect] = [:]
+
+    init(display: DisplayInfo, presentation: BoardPresentationStyle = .fullScreen) {
+        self.display = display
+        self.presentation = presentation
+    }
+
+    private var layoutProfile: BoardLayoutProfile {
+        presentation.isCompact ? .compact : .fullScreen
+    }
+
+    private var boardViewportRect: CGRect {
+        guard let geometry = presentation.compactGeometry else {
+            return display.localRect(for: display.visibleFrame)
+        }
+        let margin = layoutProfile.gridGutter
+        return CGRect(
+            x: margin,
+            y: geometry.contentTopInset + margin,
+            width: max(1, geometry.expandedFrame.width - margin * 2),
+            height: max(1, geometry.expandedFrame.height - geometry.contentTopInset - margin * 2)
+        )
+    }
 
     var body: some View {
         GeometryReader { geometry in
-            let visibleLocalRect = display.localRect(for: display.visibleFrame)
+            let visibleLocalRect = boardViewportRect
             let grid = model.grid(for: display)
             let layoutRoles = grid.roles
             let metrics = layoutMetrics(for: visibleLocalRect)
@@ -187,13 +307,19 @@ struct ArrangeBoardView: View {
             )
 
             ZStack(alignment: .topLeading) {
-                Rectangle()
-                    .fill(.black.opacity(model.isDisplayActive(display) ? 0.42 : 0.22))
-                    .ignoresSafeArea()
+                if presentation.isCompact {
+                    Rectangle()
+                        .fill(.black)
+                        .ignoresSafeArea()
+                } else {
+                    Rectangle()
+                        .fill(.black.opacity(model.isDisplayActive(display) ? 0.42 : 0.22))
+                        .ignoresSafeArea()
 
-                VisualEffectBlur()
-                    .opacity(0.86)
-                    .ignoresSafeArea()
+                    VisualEffectBlur()
+                        .opacity(0.86)
+                        .ignoresSafeArea()
+                }
 
                 ForEach(layoutRoles) { role in
                     let localRect = boardRoleRect(
@@ -220,10 +346,10 @@ struct ArrangeBoardView: View {
                         onCardDragEnded: { windowID, screenPoint in
                             draggedWindowID = nil
                             hoveredRole = nil
-                            let targetRole = grid.nearestRole(to: screenPoint)
+                            let targetRole = dropRole(at: screenPoint)
                             activeColumnRole = targetRole
                             selection = .assigned(targetRole, windowID)
-                            model.assign(windowID: windowID, at: screenPoint)
+                            model.assign(windowID: windowID, to: targetRole, displayID: display.id)
                         },
                         onCardClicked: { windowID in
                             activeColumnRole = role
@@ -250,10 +376,10 @@ struct ArrangeBoardView: View {
                     onCardDragEnded: { windowID, screenPoint in
                         draggedWindowID = nil
                         hoveredRole = nil
-                        let targetRole = grid.nearestRole(to: screenPoint)
+                        let targetRole = dropRole(at: screenPoint)
                         activeColumnRole = targetRole
                         selection = .assigned(targetRole, windowID)
-                        model.assign(windowID: windowID, at: screenPoint)
+                        model.assign(windowID: windowID, to: targetRole, displayID: display.id)
                     },
                     onCardClicked: { windowID in
                         selection = .unassigned(windowID)
@@ -264,6 +390,7 @@ struct ArrangeBoardView: View {
                     }
                 )
                 .position(x: shelfRects.openWindows.midX, y: shelfRects.openWindows.midY)
+                .boardNavigationFrame(.unassignedArea)
                 .zIndex(1)
 
                 RunningAppSwitcherStrip(
@@ -286,6 +413,7 @@ struct ArrangeBoardView: View {
                     }
                 )
                 .position(x: shelfRects.runningApps.midX, y: shelfRects.runningApps.midY)
+                .boardNavigationFrame(.runningAppsArea)
                 .zIndex(1)
 
                 if let activeModesRect = shelfRects.activeModes {
@@ -306,6 +434,7 @@ struct ArrangeBoardView: View {
                         }
                     )
                     .position(x: activeModesRect.midX, y: activeModesRect.midY)
+                    .boardNavigationFrame(.activeModesArea)
                     .zIndex(1)
                 }
 
@@ -317,6 +446,10 @@ struct ArrangeBoardView: View {
 
             }
             .contentShape(Rectangle())
+            .coordinateSpace(name: BoardNavigationCoordinateSpace.name)
+            .onPreferenceChange(BoardNavigationFramePreferenceKey.self) { frames in
+                navigationFrames = frames
+            }
             .overlay {
                 if ownsBoardInput && !isPaletteVisible && !isCleanupVisible && !isSaveModeVisible {
                     BoardKeyboardCapture { event in
@@ -409,6 +542,15 @@ struct ArrangeBoardView: View {
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
+            .clipShape(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: 0,
+                    bottomLeadingRadius: presentation.isCompact ? 26 : 0,
+                    bottomTrailingRadius: presentation.isCompact ? 26 : 0,
+                    topTrailingRadius: 0,
+                    style: .continuous
+                )
+            )
             .onExitCommand {
                 if isPaletteVisible {
                     closePalette()
@@ -439,6 +581,7 @@ struct ArrangeBoardView: View {
                 ensureSelection()
             }
             .animation(draggedWindowID == nil ? .spring(response: 0.24, dampingFraction: 0.86) : nil, value: hoveredRole)
+            .environment(\.boardLayoutProfile, layoutProfile)
         }
     }
 
@@ -506,10 +649,42 @@ struct ArrangeBoardView: View {
             draggedWindowID = windowID
         }
 
-        let role = model.grid(for: display).nearestRole(to: screenPoint)
+        let role = dropRole(at: screenPoint)
         if hoveredRole != role {
             hoveredRole = role
         }
+    }
+
+    private func dropRole(at screenPoint: CGPoint) -> ColumnRole {
+        let localPoint: CGPoint
+        if let geometry = presentation.compactGeometry {
+            localPoint = geometry.localPoint(fromScreenPoint: screenPoint)
+        } else {
+            localPoint = CGPoint(
+                x: screenPoint.x - display.frame.minX,
+                y: display.frame.maxY - screenPoint.y
+            )
+        }
+
+        let visibleLocalRect = boardViewportRect
+        let grid = model.grid(for: display)
+        let metrics = layoutMetrics(for: visibleLocalRect)
+        let roleRects = Dictionary(uniqueKeysWithValues: layoutRoles.map { role in
+            (
+                role,
+                boardRoleRect(
+                    for: role,
+                    visibleLocalRect: visibleLocalRect,
+                    metrics: metrics,
+                    grid: grid
+                )
+            )
+        })
+        return BoardDropTargetResolver.role(
+            at: localPoint,
+            roleRects: roleRects,
+            roleOrder: layoutRoles
+        ) ?? layoutRoles.first ?? .center
     }
 
     private func layoutMetrics(for visibleLocalRect: CGRect) -> (
@@ -519,10 +694,16 @@ struct ArrangeBoardView: View {
         centerStackHeight: CGFloat
     ) {
         let headerHeight: CGFloat = 0
-        let boardGutter = model.grid(for: display).gutter
-        let columnsHeight = max(260, visibleLocalRect.height - headerHeight - boardGutter)
-        let bottomShelfHeight = floor(columnsHeight * 0.35)
-        let centerStackHeight = max(160, columnsHeight - boardGutter - bottomShelfHeight)
+        let boardGutter = layoutProfile.gridGutter
+        let columnsHeight = max(
+            presentation.isCompact ? 220 : 260,
+            visibleLocalRect.height - headerHeight - boardGutter
+        )
+        let bottomShelfHeight = floor(columnsHeight * (presentation.isCompact ? 0.42 : 0.35))
+        let centerStackHeight = max(
+            presentation.isCompact ? 120 : 160,
+            columnsHeight - boardGutter - bottomShelfHeight
+        )
         return (headerHeight, columnsHeight, bottomShelfHeight, centerStackHeight)
     }
 
@@ -533,6 +714,14 @@ struct ArrangeBoardView: View {
     ) -> (runningWidth: CGFloat, activeModesWidth: CGFloat) {
         guard hasActiveModes else {
             return (max(0, totalWidth), 0)
+        }
+
+        if presentation.isCompact {
+            let activeWidth = min(150, max(110, totalWidth * 0.36))
+            return (
+                max(0, totalWidth - activeWidth - gutter),
+                min(activeWidth, max(0, totalWidth - gutter))
+            )
         }
 
         var activeWidth = min(340, max(230, totalWidth * 0.36))
@@ -556,8 +745,12 @@ struct ArrangeBoardView: View {
         ),
         grid: GridLayout
     ) -> CGRect {
-        let screenLocalRect = display.localRect(for: grid.rect(for: role))
-        let topY = visibleLocalRect.minY + metrics.headerHeight + grid.gutter
+        let screenLocalRect = mappedGridRect(
+            for: role,
+            grid: grid,
+            destination: visibleLocalRect
+        )
+        let topY = visibleLocalRect.minY + metrics.headerHeight + layoutProfile.gridGutter
 
         if usesDefaultShelfTreatment(grid.kind) {
             let height = role == .center ? metrics.centerStackHeight : metrics.columnsHeight
@@ -585,17 +778,35 @@ struct ArrangeBoardView: View {
         ).integral
     }
 
+    private func mappedGridRect(
+        for role: ColumnRole,
+        grid: GridLayout,
+        destination: CGRect
+    ) -> CGRect {
+        let source = display.localRect(for: display.visibleFrame)
+        let localRect = display.localRect(for: grid.rect(for: role))
+        guard presentation.isCompact, source.width > 0, source.height > 0 else {
+            return localRect
+        }
+        return CGRect(
+            x: destination.minX + (localRect.minX - source.minX) / source.width * destination.width,
+            y: destination.minY + (localRect.minY - source.minY) / source.height * destination.height,
+            width: localRect.width / source.width * destination.width,
+            height: localRect.height / source.height * destination.height
+        ).integral
+    }
+
     private func bottomShelfRects(
         for visibleLocalRect: CGRect,
         grid: GridLayout,
         unassignedCount: Int
     ) -> (openWindows: CGRect, runningApps: CGRect, activeModes: CGRect?) {
-        let boardGutter = grid.gutter
+        let boardGutter = layoutProfile.gridGutter
         let metrics = layoutMetrics(for: visibleLocalRect)
         let useDefaultShelf = usesDefaultShelfTreatment(grid.kind)
         let shelfWidthRect: CGRect
         if useDefaultShelf {
-            shelfWidthRect = display.localRect(for: grid.rect(for: .center))
+            shelfWidthRect = mappedGridRect(for: .center, grid: grid, destination: visibleLocalRect)
         } else {
             let width = min(960, max(460, floor(visibleLocalRect.width * 0.5)))
             shelfWidthRect = CGRect(
@@ -606,13 +817,17 @@ struct ArrangeBoardView: View {
             )
         }
         let hasActiveModes = !activeModes.isEmpty
-        let baseBottomRowHeight = hasActiveModes ? boardCombinedShelfRowHeight : boardRunningAppsRowHeight
+        let baseBottomRowHeight = hasActiveModes
+            ? layoutProfile.combinedShelfRowHeight
+            : layoutProfile.runningAppsRowHeight
         let bottomRowHeight = useDefaultShelf
             ? baseBottomRowHeight
             : max(baseBottomRowHeight, hasActiveModes ? 108 : 102)
         let openWindowsHeight = useDefaultShelf
             ? max(0, metrics.bottomShelfHeight - boardGutter - bottomRowHeight)
-            : (unassignedCount == 0 ? 92 : min(190, max(140, floor(visibleLocalRect.height * 0.17))))
+            : (presentation.isCompact
+                ? (unassignedCount == 0 ? 58 : min(110, max(78, floor(visibleLocalRect.height * 0.22))))
+                : (unassignedCount == 0 ? 92 : min(190, max(140, floor(visibleLocalRect.height * 0.17)))))
         let openWindowsY = useDefaultShelf
             ? visibleLocalRect.minY + metrics.headerHeight + boardGutter + metrics.centerStackHeight + boardGutter
             : max(
@@ -700,6 +915,13 @@ struct ArrangeBoardView: View {
 
     private func handleKeyDown(_ event: NSEvent) -> Bool {
         if handleModeConfirmationKeyDown(event) {
+            return true
+        }
+
+        if !BoardKeyboardNavigationPolicy.shouldProcess(
+            keyCode: event.keyCode,
+            isRepeat: event.isARepeat
+        ) {
             return true
         }
 
@@ -940,7 +1162,7 @@ struct ArrangeBoardView: View {
     }
 
     private func visualNavigationCandidates() -> [BoardNavigationCandidate] {
-        let visibleLocalRect = display.localRect(for: display.visibleFrame)
+        let visibleLocalRect = boardViewportRect
         let grid = model.grid(for: display)
         let metrics = layoutMetrics(for: visibleLocalRect)
         let shelfRects = bottomShelfRects(
@@ -969,7 +1191,17 @@ struct ArrangeBoardView: View {
         if let activeModesRect = shelfRects.activeModes {
             candidates.append(contentsOf: navigationCandidatesForActiveModes(zoneRect: activeModesRect))
         }
-        return candidates
+        return candidates.map { candidate in
+            guard let frame = navigationFrames[candidate.selection],
+                  frame.width > 1,
+                  frame.height > 1 else {
+                return candidate
+            }
+            return BoardNavigationCandidate(
+                selection: candidate.selection,
+                center: CGPoint(x: frame.midX, y: frame.midY)
+            )
+        }
     }
 
     private func navigationCandidatesForAssignedWindows(role: ColumnRole, zoneRect: CGRect) -> [BoardNavigationCandidate] {
@@ -985,8 +1217,14 @@ struct ArrangeBoardView: View {
                     columns: metrics.columns,
                     cardWidth: metrics.cardWidth,
                     cardHeight: metrics.cardHeight,
-                    origin: CGPoint(x: zoneRect.minX + 18, y: zoneRect.minY + 60),
-                    spacing: CGSize(width: 22, height: 18)
+                    origin: CGPoint(
+                        x: zoneRect.minX + layoutProfile.sectionPadding,
+                        y: zoneRect.minY + (presentation.isCompact ? 34 : 60)
+                    ),
+                    spacing: CGSize(
+                        width: layoutProfile.assignedColumnSpacing,
+                        height: layoutProfile.assignedRowSpacing
+                    )
                 )
             )
         }
@@ -996,14 +1234,23 @@ struct ArrangeBoardView: View {
         let windows = model.unassignedWindows(on: display)
         guard !windows.isEmpty else { return [] }
 
-        let availableCardHeight = max(120, zoneRect.height - 96)
-        let cardWidth = min(380, max(220, availableCardHeight * 1.6))
-        let cardHeight = cardWidth * 10.0 / 16.0 + 46
-        let spacing: CGFloat = 22
-        let viewportWidth = max(0, zoneRect.width - 36)
+        let availableCardHeight = max(
+            layoutProfile.unassignedMinimumCardHeight,
+            zoneRect.height - layoutProfile.unassignedHeightAllowance
+        )
+        let cardWidth = min(
+            layoutProfile.unassignedMaximumCardWidth,
+            max(layoutProfile.unassignedMinimumCardWidth, availableCardHeight * 1.6)
+        )
+        let cardHeight = cardWidth * 10.0 / 16.0 + (presentation.isCompact ? 28 : 46)
+        let spacing = layoutProfile.horizontalCardSpacing
+        let viewportWidth = max(0, zoneRect.width - layoutProfile.sectionPadding * 2)
         let contentWidth = CGFloat(windows.count) * cardWidth + CGFloat(max(windows.count - 1, 0)) * spacing
         let centeringInset = max(0, (viewportWidth - contentWidth) / 2)
-        let origin = CGPoint(x: zoneRect.minX + 18 + centeringInset, y: zoneRect.minY + 60)
+        let origin = CGPoint(
+            x: zoneRect.minX + layoutProfile.sectionPadding + centeringInset,
+            y: zoneRect.minY + (presentation.isCompact ? 34 : 60)
+        )
 
         return windows.enumerated().map { index, window in
             BoardNavigationCandidate(
@@ -1020,12 +1267,15 @@ struct ArrangeBoardView: View {
         let apps = runningApps
         guard !apps.isEmpty else { return [] }
 
-        let cardWidth: CGFloat = 82
-        let spacing: CGFloat = 12
-        let viewportWidth = max(0, zoneRect.width - 36)
+        let cardWidth = layoutProfile.runningCardWidth
+        let spacing = layoutProfile.runningCardSpacing
+        let viewportWidth = max(0, zoneRect.width - layoutProfile.sectionPadding * 2)
         let contentWidth = CGFloat(apps.count) * cardWidth + CGFloat(max(apps.count - 1, 0)) * spacing
         let centeringInset = max(0, (viewportWidth - contentWidth) / 2)
-        let origin = CGPoint(x: zoneRect.minX + 18 + centeringInset, y: zoneRect.minY + 34)
+        let origin = CGPoint(
+            x: zoneRect.minX + layoutProfile.sectionPadding + centeringInset,
+            y: zoneRect.minY + (presentation.isCompact ? 22 : 34)
+        )
 
         return apps.enumerated().map { index, item in
             BoardNavigationCandidate(
@@ -1042,12 +1292,15 @@ struct ArrangeBoardView: View {
         let modes = activeModes
         guard !modes.isEmpty else { return [] }
 
-        let cardWidth: CGFloat = 150
-        let spacing: CGFloat = 12
-        let viewportWidth = max(0, zoneRect.width - 36)
+        let cardWidth: CGFloat = presentation.isCompact ? 112 : 150
+        let spacing = layoutProfile.runningCardSpacing
+        let viewportWidth = max(0, zoneRect.width - layoutProfile.sectionPadding * 2)
         let contentWidth = CGFloat(modes.count) * cardWidth + CGFloat(max(modes.count - 1, 0)) * spacing
         let centeringInset = max(0, (viewportWidth - contentWidth) / 2)
-        let origin = CGPoint(x: zoneRect.minX + 18 + centeringInset, y: zoneRect.minY + 20)
+        let origin = CGPoint(
+            x: zoneRect.minX + layoutProfile.sectionPadding + centeringInset,
+            y: zoneRect.minY + (presentation.isCompact ? 14 : 20)
+        )
 
         return modes.enumerated().map { index, item in
             BoardNavigationCandidate(
@@ -1061,12 +1314,15 @@ struct ArrangeBoardView: View {
     }
 
     private func assignedGridMetrics(for zoneWidth: CGFloat) -> (columns: Int, cardWidth: CGFloat, cardHeight: CGFloat) {
-        let availableWidth = max(180, zoneWidth - 36)
-        let minimumWidth: CGFloat = availableWidth < 640 ? min(availableWidth, 340) : 360
-        let columns = max(1, Int((availableWidth + 22) / (minimumWidth + 22)))
-        let rawCardWidth = (availableWidth - CGFloat(columns - 1) * 22) / CGFloat(columns)
-        let cardWidth = min(460, max(minimumWidth, rawCardWidth))
-        let cardHeight = cardWidth * 10.0 / 16.0 + 46
+        let availableWidth = max(80, zoneWidth - layoutProfile.sectionPadding * 2)
+        let minimumWidth: CGFloat = presentation.isCompact
+            ? min(availableWidth, 150)
+            : (availableWidth < 640 ? min(availableWidth, 340) : 360)
+        let spacing = layoutProfile.assignedColumnSpacing
+        let columns = max(1, Int((availableWidth + spacing) / (minimumWidth + spacing)))
+        let rawCardWidth = (availableWidth - CGFloat(columns - 1) * spacing) / CGFloat(columns)
+        let cardWidth = min(presentation.isCompact ? 280 : 460, max(minimumWidth, rawCardWidth))
+        let cardHeight = cardWidth * 10.0 / 16.0 + (presentation.isCompact ? 28 : 46)
         return (columns, cardWidth, cardHeight)
     }
 
@@ -1091,10 +1347,13 @@ struct ArrangeBoardView: View {
         if let selected = candidates.first(where: { $0.selection == selection }) {
             return selected.center
         }
+        if let frame = navigationFrames[selection], frame.width > 1, frame.height > 1 {
+            return CGPoint(x: frame.midX, y: frame.midY)
+        }
 
         switch selection {
         case .column(let role):
-            let visibleLocalRect = display.localRect(for: display.visibleFrame)
+            let visibleLocalRect = boardViewportRect
             let grid = model.grid(for: display)
             let metrics = layoutMetrics(for: visibleLocalRect)
             let rect = boardRoleRect(
@@ -1108,7 +1367,7 @@ struct ArrangeBoardView: View {
                 y: rect.midY
             )
         case .unassignedArea:
-            let visibleLocalRect = display.localRect(for: display.visibleFrame)
+            let visibleLocalRect = boardViewportRect
             let shelfRects = bottomShelfRects(
                 for: visibleLocalRect,
                 grid: model.grid(for: display),
@@ -1119,7 +1378,7 @@ struct ArrangeBoardView: View {
                 y: shelfRects.openWindows.midY
             )
         case .runningAppsArea:
-            let visibleLocalRect = display.localRect(for: display.visibleFrame)
+            let visibleLocalRect = boardViewportRect
             let shelfRects = bottomShelfRects(
                 for: visibleLocalRect,
                 grid: model.grid(for: display),
@@ -1130,7 +1389,7 @@ struct ArrangeBoardView: View {
                 y: shelfRects.runningApps.midY
             )
         case .activeModesArea:
-            let visibleLocalRect = display.localRect(for: display.visibleFrame)
+            let visibleLocalRect = boardViewportRect
             let shelfRects = bottomShelfRects(
                 for: visibleLocalRect,
                 grid: model.grid(for: display),
@@ -1164,21 +1423,14 @@ struct ArrangeBoardView: View {
         direction: BoardNavigationDirection,
         from origin: CGPoint
     ) -> CGFloat {
-        let dx = point.x - origin.x
-        let dy = point.y - origin.y
-        let primary: CGFloat
-        let secondary: CGFloat
-
-        switch direction {
-        case .left, .right:
-            primary = abs(dx)
-            secondary = abs(dy)
-        case .up, .down:
-            primary = abs(dy)
-            secondary = abs(dx)
+        // Directional movement should advance to the nearest visual row or column.
+        // Overweighting cross-axis alignment made Right skip an adjacent card and
+        // made Down jump over Open Windows to the lower Running Apps shelf.
+        let axis: BoardNavigationAxis = switch direction {
+        case .left, .right: .horizontal
+        case .up, .down: .vertical
         }
-
-        return primary + secondary * 2.4
+        return BoardNavigationGeometry.score(point: point, from: origin, axis: axis)
     }
 
     private func selectFirstWindowOrColumn(in role: ColumnRole) {
@@ -1625,6 +1877,7 @@ struct ArrangeBoardView: View {
 
 private struct ColumnDropZone: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.boardLayoutProfile) private var profile
     let display: DisplayInfo
     let role: ColumnRole
     let size: CGSize
@@ -1640,30 +1893,35 @@ private struct ColumnDropZone: View {
     var body: some View {
         let windows = model.boardWindows(for: role, on: display)
         let isColumnSelected = selection?.isSelected(column: role) == true
+        let cornerRadius: CGFloat = profile == .compact ? 14 : 18
+        let isEmphasized = isDropTarget || isColumnSelected
+        let idleFillOpacity: Double = profile == .compact ? 0.055 : 0.08
+        let idleStrokeOpacity: Double = profile == .compact ? 0.20 : 0.34
+        let idleLineWidth: CGFloat = profile == .compact ? 1 : 1.5
 
         ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(.white.opacity(isDropTarget || isColumnSelected ? 0.18 : 0.08))
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(.white.opacity(isEmphasized ? 0.18 : idleFillOpacity))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                         .strokeBorder(
-                            .white.opacity(isDropTarget || isColumnSelected ? 0.82 : 0.34),
-                            style: StrokeStyle(lineWidth: isDropTarget || isColumnSelected ? 3 : 1.5, dash: [8, 7])
+                            .white.opacity(isEmphasized ? 0.82 : idleStrokeOpacity),
+                            style: StrokeStyle(lineWidth: isEmphasized ? 3 : idleLineWidth, dash: [8, 7])
                         )
                 }
                 .allowsHitTesting(false)
                 .zIndex(0)
 
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: profile.sectionSpacing) {
                 HStack {
                     Label(role.title, systemImage: iconName)
-                        .font(.headline)
+                        .font(profile == .compact ? .caption.weight(.semibold) : .headline)
                         .foregroundStyle(.white.opacity(0.9))
                     Spacer()
                     Text("\(windows.count)")
                         .font(.caption.weight(.bold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
+                        .padding(.horizontal, profile == .compact ? 6 : 8)
+                        .padding(.vertical, profile == .compact ? 2 : 4)
                         .background(.white.opacity(0.16), in: Capsule())
                         .foregroundStyle(.white)
                 }
@@ -1681,7 +1939,7 @@ private struct ColumnDropZone: View {
                     Spacer()
                 } else {
                     ScrollView(.vertical, showsIndicators: false) {
-                        LazyVGrid(columns: gridColumns(for: size.width), spacing: 18) {
+                        LazyVGrid(columns: gridColumns(for: size.width), spacing: profile.assignedRowSpacing) {
                             ForEach(windows) { window in
                                 WindowThumbnailCard(
                                     window: window,
@@ -1694,13 +1952,14 @@ private struct ColumnDropZone: View {
                                     onClicked: onCardClicked,
                                     onDoubleClicked: onCardDoubleClicked
                                 )
+                                .boardNavigationFrame(.assigned(role, window.id))
                             }
                         }
-                        .padding(.vertical, 6)
+                        .padding(.vertical, profile == .compact ? 2 : 6)
                     }
                 }
             }
-            .padding(18)
+            .padding(profile.sectionPadding)
             .zIndex(2)
         }
         .frame(width: size.width, height: size.height)
@@ -1714,10 +1973,16 @@ private struct ColumnDropZone: View {
     }
 
     private func gridColumns(for width: CGFloat) -> [GridItem] {
-        let availableWidth = max(180, width - 36)
-        let minimumWidth: CGFloat = availableWidth < 640 ? min(availableWidth, 340) : 360
+        let availableWidth = max(80, width - profile.sectionPadding * 2)
+        let minimumWidth: CGFloat = profile == .compact
+            ? min(availableWidth, 150)
+            : (availableWidth < 640 ? min(availableWidth, 340) : 360)
         return [
-            GridItem(.adaptive(minimum: minimumWidth, maximum: 460), spacing: 22, alignment: .top)
+            GridItem(
+                .adaptive(minimum: minimumWidth, maximum: profile == .compact ? 280 : 460),
+                spacing: profile.assignedColumnSpacing,
+                alignment: .top
+            )
         ]
     }
 
@@ -1733,6 +1998,7 @@ private struct ColumnDropZone: View {
 }
 
 private struct UnassignedWindowStrip: View {
+    @Environment(\.boardLayoutProfile) private var profile
     let windows: [ManagedWindow]
     let size: CGSize
     let selection: BoardSelection?
@@ -1743,28 +2009,32 @@ private struct UnassignedWindowStrip: View {
     let onCardDoubleClicked: (String) -> Void
 
     var body: some View {
+        let idleFillOpacity: Double = profile == .compact ? 0.045 : 0.07
+        let idleStrokeOpacity: Double = profile == .compact ? 0.16 : 0.24
+        let idleLineWidth: CGFloat = profile == .compact ? 1 : 1.5
+
         ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(.white.opacity(isAreaSelected ? 0.16 : 0.07))
+            RoundedRectangle(cornerRadius: profile == .compact ? 14 : 18, style: .continuous)
+                .fill(.white.opacity(isAreaSelected ? 0.16 : idleFillOpacity))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    RoundedRectangle(cornerRadius: profile == .compact ? 14 : 18, style: .continuous)
                         .strokeBorder(
-                            .white.opacity(isAreaSelected ? 0.78 : 0.24),
-                            style: StrokeStyle(lineWidth: isAreaSelected ? 2.5 : 1.5, dash: [8, 7])
+                            .white.opacity(isAreaSelected ? 0.78 : idleStrokeOpacity),
+                            style: StrokeStyle(lineWidth: isAreaSelected ? 2.5 : idleLineWidth, dash: [8, 7])
                         )
                 }
                 .allowsHitTesting(false)
 
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: profile.sectionSpacing) {
                 HStack {
                     Label("Open Windows", systemImage: "rectangle.stack")
-                        .font(.headline)
+                        .font(profile == .compact ? .caption.weight(.semibold) : .headline)
                         .foregroundStyle(.white.opacity(0.9))
                     Spacer()
                     Text("\(windows.count)")
                         .font(.caption.weight(.bold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
+                        .padding(.horizontal, profile == .compact ? 6 : 8)
+                        .padding(.vertical, profile == .compact ? 2 : 4)
                         .background(.white.opacity(0.16), in: Capsule())
                         .foregroundStyle(.white)
                 }
@@ -1777,10 +2047,16 @@ private struct UnassignedWindowStrip: View {
                         .frame(maxWidth: .infinity)
                     Spacer()
                 } else {
-                    let availableCardHeight = max(120, size.height - 96)
-                    let cardWidth = min(380, max(220, availableCardHeight * 1.6))
-                    let cardSpacing: CGFloat = 22
-                    let horizontalPadding: CGFloat = 18
+                    let availableCardHeight = max(
+                        profile.unassignedMinimumCardHeight,
+                        size.height - profile.unassignedHeightAllowance
+                    )
+                    let cardWidth = min(
+                        profile.unassignedMaximumCardWidth,
+                        max(profile.unassignedMinimumCardWidth, availableCardHeight * 1.6)
+                    )
+                    let cardSpacing = profile.horizontalCardSpacing
+                    let horizontalPadding = profile.sectionPadding
                     let scrollViewportWidth = max(0, size.width - horizontalPadding * 2)
                     let contentWidth = CGFloat(windows.count) * cardWidth +
                         CGFloat(max(windows.count - 1, 0)) * cardSpacing
@@ -1799,14 +2075,15 @@ private struct UnassignedWindowStrip: View {
                                     onDoubleClicked: onCardDoubleClicked
                                 )
                                 .frame(width: cardWidth)
+                                .boardNavigationFrame(.unassigned(window.id))
                             }
                         }
                         .padding(.horizontal, centeringInset)
-                        .padding(.vertical, 6)
+                        .padding(.vertical, profile == .compact ? 2 : 6)
                     }
                 }
             }
-            .padding(18)
+            .padding(profile.sectionPadding)
         }
         .frame(width: size.width, height: size.height)
         .contentShape(Rectangle())
@@ -1815,6 +2092,7 @@ private struct UnassignedWindowStrip: View {
 }
 
 private struct RunningAppSwitcherStrip: View {
+    @Environment(\.boardLayoutProfile) private var profile
     let apps: [RunningApplicationItem]
     let size: CGSize
     let selection: BoardSelection?
@@ -1824,21 +2102,26 @@ private struct RunningAppSwitcherStrip: View {
     let onAppDoubleClicked: (RunningApplicationItem) -> Void
 
     var body: some View {
-        let labelWidth = min(130, max(96, size.width * 0.24))
+        let labelWidth = profile == .compact
+            ? min(86, max(66, size.width * 0.22))
+            : min(130, max(96, size.width * 0.24))
+        let idleFillOpacity: Double = profile == .compact ? 0.04 : 0.055
+        let idleStrokeOpacity: Double = profile == .compact ? 0.13 : 0.18
+        let idleLineWidth: CGFloat = profile == .compact ? 1 : 1.2
 
         ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(.white.opacity(isAreaSelected ? 0.15 : 0.055))
+            RoundedRectangle(cornerRadius: profile == .compact ? 14 : 18, style: .continuous)
+                .fill(.white.opacity(isAreaSelected ? 0.15 : idleFillOpacity))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    RoundedRectangle(cornerRadius: profile == .compact ? 14 : 18, style: .continuous)
                         .strokeBorder(
-                            .white.opacity(isAreaSelected ? 0.72 : 0.18),
-                            style: StrokeStyle(lineWidth: isAreaSelected ? 2.5 : 1.2, dash: [8, 7])
+                            .white.opacity(isAreaSelected ? 0.72 : idleStrokeOpacity),
+                            style: StrokeStyle(lineWidth: isAreaSelected ? 2.5 : idleLineWidth, dash: [8, 7])
                         )
                 }
                 .allowsHitTesting(false)
 
-            HStack(spacing: 14) {
+            HStack(spacing: profile == .compact ? 8 : 14) {
                 Label("Running Apps", systemImage: "app.dashed")
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.white.opacity(0.86))
@@ -1850,9 +2133,9 @@ private struct RunningAppSwitcherStrip: View {
                         .foregroundStyle(.white.opacity(0.56))
                         .frame(maxWidth: .infinity, alignment: .center)
                 } else {
-                    let cardWidth: CGFloat = 82
-                    let spacing: CGFloat = 12
-                    let viewportWidth = max(0, size.width - labelWidth - 44)
+                    let cardWidth = profile.runningCardWidth
+                    let spacing = profile.runningCardSpacing
+                    let viewportWidth = max(0, size.width - labelWidth - profile.sectionPadding * 2 - 8)
                     let contentWidth = CGFloat(apps.count) * cardWidth +
                         CGFloat(max(apps.count - 1, 0)) * spacing
                     let centeringInset = max(0, (viewportWidth - contentWidth) / 2)
@@ -1867,15 +2150,16 @@ private struct RunningAppSwitcherStrip: View {
                                     onDoubleClicked: onAppDoubleClicked
                                 )
                                 .frame(width: cardWidth)
+                                .boardNavigationFrame(.runningApplication(item.id))
                             }
                         }
                         .padding(.horizontal, centeringInset)
-                        .padding(.vertical, 6)
+                        .padding(.vertical, profile == .compact ? 2 : 6)
                     }
                 }
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
+            .padding(.horizontal, profile.sectionPadding)
+            .padding(.vertical, profile == .compact ? 6 : 12)
         }
         .frame(width: size.width, height: size.height)
         .contentShape(Rectangle())
@@ -1885,6 +2169,7 @@ private struct RunningAppSwitcherStrip: View {
 }
 
 private struct RunningAppIconCard: View {
+    @Environment(\.boardLayoutProfile) private var profile
     let item: RunningApplicationItem
     let isSelected: Bool
     let onClicked: (RunningApplicationItem) -> Void
@@ -1892,13 +2177,13 @@ private struct RunningAppIconCard: View {
     @State private var isHovered = false
 
     var body: some View {
-        VStack(spacing: 5) {
+        VStack(spacing: profile == .compact ? 2 : 5) {
             icon
-                .frame(width: 38, height: 38)
-                .padding(7)
-                .background(.white.opacity(0.96), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .frame(width: profile.iconSize, height: profile.iconSize)
+                .padding(profile.iconPadding)
+                .background(.white.opacity(0.96), in: RoundedRectangle(cornerRadius: profile == .compact ? 10 : 14, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    RoundedRectangle(cornerRadius: profile == .compact ? 10 : 14, style: .continuous)
                         .strokeBorder(.black.opacity(0.08), lineWidth: 1)
                 }
                 .shadow(color: .black.opacity(isHovered || isSelected ? 0.28 : 0.12), radius: isHovered || isSelected ? 12 : 5, y: 4)
@@ -1909,7 +2194,7 @@ private struct RunningAppIconCard: View {
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.vertical, 4)
+        .padding(.vertical, profile == .compact ? 2 : 4)
         .background(.white.opacity(isSelected ? 0.16 : (isHovered ? 0.08 : 0)), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -1949,6 +2234,7 @@ private struct RunningAppIconCard: View {
 }
 
 private struct ActiveModeStrip: View {
+    @Environment(\.boardLayoutProfile) private var profile
     let modes: [ActiveModeInstance]
     let size: CGSize
     let selection: BoardSelection?
@@ -1958,29 +2244,36 @@ private struct ActiveModeStrip: View {
     let onModeDoubleClicked: (ActiveModeInstance) -> Void
 
     var body: some View {
-        let labelWidth = min(118, max(90, size.width * 0.38))
-        let chipWidth = min(142, max(112, size.width - labelWidth - 48))
+        let labelWidth = profile == .compact
+            ? min(82, max(62, size.width * 0.34))
+            : min(118, max(90, size.width * 0.38))
+        let chipWidth = profile == .compact
+            ? min(112, max(82, size.width - labelWidth - 30))
+            : min(142, max(112, size.width - labelWidth - 48))
+        let idleFillOpacity: Double = profile == .compact ? 0.04 : 0.055
+        let idleStrokeOpacity: Double = profile == .compact ? 0.13 : 0.18
+        let idleLineWidth: CGFloat = profile == .compact ? 1 : 1.2
 
         ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(.white.opacity(isAreaSelected ? 0.15 : 0.055))
+            RoundedRectangle(cornerRadius: profile == .compact ? 14 : 18, style: .continuous)
+                .fill(.white.opacity(isAreaSelected ? 0.15 : idleFillOpacity))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    RoundedRectangle(cornerRadius: profile == .compact ? 14 : 18, style: .continuous)
                         .strokeBorder(
-                            .white.opacity(isAreaSelected ? 0.72 : 0.18),
-                            style: StrokeStyle(lineWidth: isAreaSelected ? 2.5 : 1.2, dash: [8, 7])
+                            .white.opacity(isAreaSelected ? 0.72 : idleStrokeOpacity),
+                            style: StrokeStyle(lineWidth: isAreaSelected ? 2.5 : idleLineWidth, dash: [8, 7])
                         )
                 }
                 .allowsHitTesting(false)
 
-            HStack(spacing: 14) {
+            HStack(spacing: profile == .compact ? 8 : 14) {
                 Label("Active Groups", systemImage: "square.grid.3x1.below.line.grid.1x2")
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.white.opacity(0.86))
                     .frame(width: labelWidth, alignment: .leading)
 
                 ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(spacing: 12) {
+                    LazyHStack(spacing: profile.runningCardSpacing) {
                         ForEach(modes) { mode in
                             ActiveModeChip(
                                 mode: mode,
@@ -1989,13 +2282,14 @@ private struct ActiveModeStrip: View {
                                 onDoubleClicked: onModeDoubleClicked
                             )
                             .frame(width: chipWidth)
+                            .boardNavigationFrame(.activeMode(mode.id))
                         }
                     }
-                    .padding(.vertical, 6)
+                    .padding(.vertical, profile == .compact ? 2 : 6)
                 }
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 10)
+            .padding(.horizontal, profile.sectionPadding)
+            .padding(.vertical, profile == .compact ? 5 : 10)
         }
         .frame(width: size.width, height: size.height)
         .contentShape(Rectangle())
@@ -2005,6 +2299,7 @@ private struct ActiveModeStrip: View {
 }
 
 private struct ActiveModeChip: View {
+    @Environment(\.boardLayoutProfile) private var profile
     let mode: ActiveModeInstance
     let isSelected: Bool
     let onClicked: (ActiveModeInstance) -> Void
@@ -2012,12 +2307,12 @@ private struct ActiveModeChip: View {
     @State private var isHovered = false
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: profile == .compact ? 6 : 10) {
             HStack(spacing: -6) {
                 ForEach(Array(mode.windowBindings.prefix(4).enumerated()), id: \.offset) { _, binding in
                     modeIcon(for: binding)
-                        .frame(width: 22, height: 22)
-                        .padding(4)
+                        .frame(width: profile == .compact ? 17 : 22, height: profile == .compact ? 17 : 22)
+                        .padding(profile == .compact ? 3 : 4)
                         .background(.white.opacity(0.96), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                         .overlay {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -2025,7 +2320,7 @@ private struct ActiveModeChip: View {
                         }
                 }
             }
-            .frame(height: 30, alignment: .leading)
+            .frame(height: profile == .compact ? 24 : 30, alignment: .leading)
 
             Text(mode.modeName)
                 .font(.caption.weight(.semibold))
@@ -2035,8 +2330,8 @@ private struct ActiveModeChip: View {
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 10)
+        .padding(.horizontal, profile == .compact ? 7 : 10)
+        .padding(.vertical, profile == .compact ? 6 : 10)
         .background(.white.opacity(isSelected ? 0.16 : (isHovered ? 0.08 : 0.035)), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -2071,6 +2366,7 @@ private struct ActiveModeChip: View {
 }
 
 private struct WindowThumbnailCard: View {
+    @Environment(\.boardLayoutProfile) private var profile
     let window: ManagedWindow
     let role: ColumnRole
     let isSelected: Bool
@@ -2084,17 +2380,17 @@ private struct WindowThumbnailCard: View {
     @State private var dragTranslation: CGSize = .zero
 
     var body: some View {
-        VStack(alignment: .center, spacing: 8) {
+        VStack(alignment: .center, spacing: profile.cardTextSpacing) {
             ZStack(alignment: .topLeading) {
                 previewImage
                     .zIndex(0)
 
                 appIconBadge
-                    .padding(12)
+                    .padding(profile == .compact ? 6 : 12)
                     .zIndex(2)
 
                 dragHint
-                    .padding(10)
+                    .padding(profile == .compact ? 5 : 10)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                     .zIndex(3)
 
@@ -2137,7 +2433,7 @@ private struct WindowThumbnailCard: View {
             .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 4)
+        .padding(.vertical, profile == .compact ? 1 : 4)
         .offset(dragTranslation)
         .scaleEffect(isDragging ? 1.02 : (isPressed ? 0.985 : (isHovered ? 1.015 : 1)))
         .shadow(
@@ -2192,19 +2488,19 @@ private struct WindowThumbnailCard: View {
 
     private var dragHint: some View {
         Image(systemName: "line.3.horizontal")
-            .font(.system(size: 13, weight: .bold))
+            .font(.system(size: profile == .compact ? 10 : 13, weight: .bold))
             .foregroundStyle(.white.opacity(0.82))
-            .padding(8)
+            .padding(profile == .compact ? 5 : 8)
             .background(.black.opacity(0.46), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private var appIconBadge: some View {
         appIcon
-            .frame(width: 38, height: 38)
-            .padding(7)
-            .background(.white.opacity(0.96), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .frame(width: profile.iconSize, height: profile.iconSize)
+            .padding(profile.iconPadding)
+            .background(.white.opacity(0.96), in: RoundedRectangle(cornerRadius: profile == .compact ? 10 : 13, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                RoundedRectangle(cornerRadius: profile == .compact ? 10 : 13, style: .continuous)
                     .strokeBorder(.black.opacity(0.08), lineWidth: 1)
             }
             .shadow(color: .black.opacity(0.24), radius: 10, y: 4)
@@ -2522,6 +2818,7 @@ private struct ModeNameTextField: NSViewRepresentable {
 }
 
 private struct SaveModeOverlay: View {
+    @Environment(\.boardLayoutProfile) private var profile
     @Binding var name: String
     let modes: [SavedMode]
     let preview: ModeCapturePreview
@@ -2576,34 +2873,42 @@ private struct SaveModeOverlay: View {
 
                 captureSummary
 
-                VStack(alignment: .leading, spacing: 8) {
-                    SaveModeChoiceRow(
-                        title: "Save as new group",
-                        detail: "Return",
-                        windows: capturedWindows,
-                        isSelected: selectedModeIndex < 0,
-                        action: {
-                            selectedModeIndex = -1
-                            onSaveNew()
-                        }
-                    )
-                    ForEach(Array(modes.enumerated()), id: \.element.id) { index, mode in
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 8) {
                         SaveModeChoiceRow(
-                            title: "Replace \(mode.name)",
-                            detail: mode.shortcutLabel,
-                            windows: mode.windows,
-                            isSelected: selectedModeIndex == index,
+                            title: "Save as new group",
+                            detail: "Return",
+                            windows: capturedWindows,
+                            isSelected: selectedModeIndex < 0,
                             action: {
-                                selectedModeIndex = index
-                                onReplace()
+                                selectedModeIndex = -1
+                                onSaveNew()
                             }
                         )
+                        ForEach(Array(modes.enumerated()), id: \.element.id) { index, mode in
+                            SaveModeChoiceRow(
+                                title: "Replace \(mode.name)",
+                                detail: mode.shortcutLabel,
+                                windows: mode.windows,
+                                isSelected: selectedModeIndex == index,
+                                action: {
+                                    selectedModeIndex = index
+                                    onReplace()
+                                }
+                            )
+                        }
                     }
                 }
+                .frame(maxHeight: profile == .compact ? 120 : nil)
             }
             .frame(width: 560)
             .padding(22)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .background {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(profile == .compact
+                        ? AnyShapeStyle(Color.black.opacity(0.98))
+                        : AnyShapeStyle(.ultraThinMaterial))
+            }
             .overlay {
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .strokeBorder(.white.opacity(0.22), lineWidth: 1)
@@ -2791,6 +3096,7 @@ private struct SaveModeIconCluster: View {
 }
 
 private struct ModeLaunchConfirmationOverlay: View {
+    @Environment(\.boardLayoutProfile) private var profile
     let mode: SavedMode
     let policy: ModeLaunchPolicy
     let onPolicyChange: (ModeLaunchPolicy) -> Void
@@ -2847,7 +3153,12 @@ private struct ModeLaunchConfirmationOverlay: View {
             }
             .frame(width: 470)
             .padding(20)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .background {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(profile == .compact
+                        ? AnyShapeStyle(Color.black.opacity(0.98))
+                        : AnyShapeStyle(.ultraThinMaterial))
+            }
             .overlay {
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .strokeBorder(.white.opacity(0.22), lineWidth: 1)
@@ -2923,6 +3234,7 @@ private struct LaunchPolicyRow: View {
 }
 
 private struct BoardPaletteOverlay: View {
+    @Environment(\.boardLayoutProfile) private var profile
     @Binding var query: String
     let results: [BoardPaletteResult]
     let shortcuts: [(String, String)]
@@ -2958,7 +3270,12 @@ private struct BoardPaletteOverlay: View {
                 }
             }
             .frame(width: 560)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .background {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(profile == .compact
+                        ? AnyShapeStyle(Color.black.opacity(0.98))
+                        : AnyShapeStyle(.ultraThinMaterial))
+            }
             .overlay {
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .strokeBorder(.white.opacity(0.22), lineWidth: 1)
@@ -3068,7 +3385,7 @@ private struct BoardPaletteOverlay: View {
                     }
                     .padding(8)
                 }
-                .frame(maxHeight: 360)
+                .frame(maxHeight: profile == .compact ? 170 : 360)
             }
         }
     }
@@ -3458,6 +3775,7 @@ private struct BoardPaletteResultRow: View {
 }
 
 private struct CleanupOverlay: View {
+    @Environment(\.boardLayoutProfile) private var profile
     let candidates: [CleanupCandidate]
     @Binding var selectedIDs: Set<String>
     @Binding var selectedIndex: Int
@@ -3489,21 +3807,24 @@ private struct CleanupOverlay: View {
                         .foregroundStyle(.white.opacity(0.66))
                         .frame(maxWidth: .infinity, minHeight: 120)
                 } else {
-                    VStack(spacing: 6) {
-                        ForEach(Array(candidates.enumerated()), id: \.element.id) { index, candidate in
-                            CleanupCandidateRow(
-                                candidate: candidate,
-                                number: index + 1,
-                                isSelected: index == selectedIndex,
-                                isChecked: selectedIDs.contains(candidate.id)
-                            )
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                selectedIndex = index
-                                toggle(candidate)
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(spacing: 6) {
+                            ForEach(Array(candidates.enumerated()), id: \.element.id) { index, candidate in
+                                CleanupCandidateRow(
+                                    candidate: candidate,
+                                    number: index + 1,
+                                    isSelected: index == selectedIndex,
+                                    isChecked: selectedIDs.contains(candidate.id)
+                                )
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    selectedIndex = index
+                                    toggle(candidate)
+                                }
                             }
                         }
                     }
+                    .frame(maxHeight: profile == .compact ? 170 : nil)
                 }
 
                 HStack {
@@ -3520,7 +3841,12 @@ private struct CleanupOverlay: View {
             }
             .padding(22)
             .frame(width: 520)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .background {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(profile == .compact
+                        ? AnyShapeStyle(Color.black.opacity(0.98))
+                        : AnyShapeStyle(.ultraThinMaterial))
+            }
             .overlay {
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .strokeBorder(.white.opacity(0.22), lineWidth: 1)

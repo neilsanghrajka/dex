@@ -12,6 +12,11 @@ final class AppModel: ObservableObject {
             store.arrangeAllDisplays = arrangeAllDisplays
         }
     }
+    @Published var boardPresentationMode: BoardPresentationMode {
+        didSet {
+            store.boardPresentationMode = boardPresentationMode
+        }
+    }
     /// Live, user-editable list of app-launch shortcuts. Single source of truth for
     /// the board key handler, the palette shortcut-help, and (later) the onboarding tour.
     @Published var appShortcutBindings: [AppShortcutBinding] {
@@ -82,6 +87,7 @@ final class AppModel: ObservableObject {
 
     init() {
         self.arrangeAllDisplays = store.arrangeAllDisplays
+        self.boardPresentationMode = store.boardPresentationMode
         self.stacksByDisplay = store.loadStacks()
         self.stacksByWorkspace = store.loadWorkspaceStacks()
         self.layoutKindsByWorkspace = store.loadDisplayLayoutKinds()
@@ -199,7 +205,11 @@ final class AppModel: ObservableObject {
             arrangeAssignedWindows(displayIDs: repairedDisplayIDs, raiseActiveWindows: false)
             await refreshWindows(includeThumbnails: false, pruneMissingWindows: false)
         }
-        overlayController.showArrangeBoard(model: self, displays: displays)
+        overlayController.showArrangeBoard(
+            model: self,
+            displays: displays,
+            presentationMode: boardPresentationMode
+        )
         isArrangeBoardVisible = true
         startArrangeBoardSpaceRefreshLoop()
         beginInBoardTourIfSummoning()
@@ -1402,7 +1412,11 @@ final class AppModel: ObservableObject {
 
         activeBoardDisplayID = target.displayID
         if let display = display(withID: target.displayID), isArrangeBoardVisible {
-            overlayController.showArrangeBoard(model: self, displays: [display])
+            overlayController.showArrangeBoard(
+                model: self,
+                displays: [display],
+                presentationMode: boardPresentationMode
+            )
             refocusArrangeBoardIfNeeded()
         }
         return (target.displayID, targetRole)

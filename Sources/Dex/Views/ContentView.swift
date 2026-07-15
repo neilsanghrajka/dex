@@ -209,6 +209,19 @@ private struct PreferencesPane: View {
     var body: some View {
         Form {
             Section {
+                Picker("Board presentation", selection: $model.boardPresentationMode) {
+                    ForEach(BoardPresentationMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+            } header: {
+                Text("Board Appearance")
+            } footer: {
+                Text("Compact Island opens an opaque, top-centered board on whichever display you are using. Full Screen keeps the original board.")
+            }
+
+            Section {
                 Toggle("Show shortcut legend on the board", isOn: $model.showsBoardLegend)
                     .toggleStyle(.switch)
             } header: {

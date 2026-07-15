@@ -207,6 +207,26 @@ final class GridLayoutTests: XCTestCase {
         XCTAssertEqual(layout.previousRole(before: .bottomRight), .bottomLeft)
     }
 
+    func testThreeColumnHorizontalMovesAdvanceExactlyOneRole() {
+        let layout = GridLayout(
+            visibleFrame: CGRect(x: 0, y: 0, width: 1920, height: 1000),
+            gutter: 10,
+            kind: .threeColumn
+        )
+
+        XCTAssertEqual(layout.nextRole(after: .left), .center)
+        XCTAssertEqual(layout.nextRole(after: .center), .right)
+        XCTAssertEqual(layout.previousRole(before: .right), .center)
+        XCTAssertEqual(layout.previousRole(before: .center), .left)
+    }
+
+    func testBoardNavigationProcessesOnlyInitialDirectionalKeyDown() {
+        XCTAssertTrue(BoardKeyboardNavigationPolicy.shouldProcess(keyCode: 124, isRepeat: false))
+        XCTAssertFalse(BoardKeyboardNavigationPolicy.shouldProcess(keyCode: 124, isRepeat: true))
+        XCTAssertFalse(BoardKeyboardNavigationPolicy.shouldProcess(keyCode: 125, isRepeat: true))
+        XCTAssertTrue(BoardKeyboardNavigationPolicy.shouldProcess(keyCode: 36, isRepeat: true))
+    }
+
     func testStackedHorizontalRoleMovesDoNotMoveVertically() {
         let leftMain = GridLayout(
             visibleFrame: CGRect(x: 0, y: 0, width: 1000, height: 800),

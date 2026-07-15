@@ -20,6 +20,7 @@ final class LayoutStore {
     private let hasCompletedOnboardingKey = "dex.hasCompletedOnboarding"
     private let showsBoardLegendKey = "dex.showsBoardLegend"
     private let boardLegendSessionsRemainingKey = "dex.boardLegendSessionsRemaining"
+    private let boardPresentationModeKey = "dex.boardPresentationMode"
 
     init(defaults: UserDefaults = .standard, legacyDefaults: UserDefaults? = nil) {
         self.defaults = defaults
@@ -36,6 +37,19 @@ final class LayoutStore {
     var arrangeAllDisplays: Bool {
         get { defaults.bool(forKey: allDisplaysKey) }
         set { defaults.set(newValue, forKey: allDisplaysKey) }
+    }
+
+    var boardPresentationMode: BoardPresentationMode {
+        get {
+            guard let rawValue = defaults.string(forKey: boardPresentationModeKey),
+                  let mode = BoardPresentationMode(rawValue: rawValue) else {
+                return .fullScreen
+            }
+            return mode
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: boardPresentationModeKey)
+        }
     }
 
     /// Set once the user completes OR exits onboarding. Once true, onboarding never

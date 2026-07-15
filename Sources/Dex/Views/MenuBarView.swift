@@ -18,6 +18,12 @@ struct MenuBarView: View {
 
         Toggle("Arrange All Displays", isOn: $model.arrangeAllDisplays)
 
+        Picker("Board Presentation", selection: $model.boardPresentationMode) {
+            ForEach(BoardPresentationMode.allCases) { mode in
+                Text(mode.title).tag(mode)
+            }
+        }
+
         Button("Refresh Permissions") {
             model.refreshPermissions()
         }
