@@ -75,6 +75,7 @@ private extension EnvironmentValues {
 private struct BoardNavigationCandidate {
     let selection: BoardSelection
     let frame: CGRect
+    let region: BoardNavigationRegion
 }
 
 private enum BoardNavigationCoordinateSpace {
@@ -1151,9 +1152,14 @@ struct ArrangeBoardView: View {
         }
 
         let eligible = candidates.filter { $0.selection != selection }
-        guard let index = BoardNavigationGeometry.targetIndex(
+        let roleFrames = boardRoleFrames()
+        guard let currentRegion = navigationRegion(for: selection),
+              let index = BoardNavigationGeometry.semanticTargetIndex(
             from: origin,
+            currentRegion: currentRegion,
             candidates: eligible.map(\.frame),
+            candidateRegions: eligible.map(\.region),
+            roleFrames: roleFrames,
             direction: direction
         ) else {
             return nil
@@ -1199,16 +1205,46 @@ struct ArrangeBoardView: View {
             }
             return BoardNavigationCandidate(
                 selection: candidate.selection,
-                frame: frame
+                frame: frame,
+                region: candidate.region
             )
+        }
+    }
+
+    private func boardRoleFrames() -> [ColumnRole: CGRect] {
+        let visibleLocalRect = boardViewportRect
+        let grid = model.grid(for: display)
+        let metrics = layoutMetrics(for: visibleLocalRect)
+        return Dictionary(uniqueKeysWithValues: layoutRoles.map { role in
+            (
+                role,
+                boardRoleRect(
+                    for: role,
+                    visibleLocalRect: visibleLocalRect,
+                    metrics: metrics,
+                    grid: grid
+                )
+            )
+        })
+    }
+
+    private func navigationRegion(for selection: BoardSelection?) -> BoardNavigationRegion? {
+        guard let selection else { return nil }
+        switch selection {
+        case .column(let role), .assigned(let role, _):
+            return .role(role)
+        case .unassignedArea, .unassigned:
+            return .openWindows
+        case .runningAppsArea, .runningApplication:
+            return .runningApps
+        case .activeModesArea, .activeMode:
+            return .activeModes
         }
     }
 
     private func navigationCandidatesForAssignedWindows(role: ColumnRole, zoneRect: CGRect) -> [BoardNavigationCandidate] {
         let windows = windows(for: role)
-        guard !windows.isEmpty else {
-            return [BoardNavigationCandidate(selection: .column(role), frame: zoneRect)]
-        }
+        guard !windows.isEmpty else { return [] }
 
         let metrics = assignedGridMetrics(for: zoneRect.width)
         return windows.enumerated().map { index, window in
@@ -1227,16 +1263,15 @@ struct ArrangeBoardView: View {
                         width: layoutProfile.assignedColumnSpacing,
                         height: layoutProfile.assignedRowSpacing
                     )
-                )
+                ),
+                region: .role(role)
             )
         }
     }
 
     private func navigationCandidatesForUnassignedWindows(zoneRect: CGRect) -> [BoardNavigationCandidate] {
         let windows = model.unassignedWindows(on: display)
-        guard !windows.isEmpty else {
-            return [BoardNavigationCandidate(selection: .unassignedArea, frame: zoneRect)]
-        }
+        guard !windows.isEmpty else { return [] }
 
         let availableCardHeight = max(
             layoutProfile.unassignedMinimumCardHeight,
@@ -1264,16 +1299,15 @@ struct ArrangeBoardView: View {
                     y: origin.y,
                     width: cardWidth,
                     height: cardHeight
-                )
+                ),
+                region: .openWindows
             )
         }
     }
 
     private func navigationCandidatesForRunningApps(zoneRect: CGRect) -> [BoardNavigationCandidate] {
         let apps = runningApps
-        guard !apps.isEmpty else {
-            return [BoardNavigationCandidate(selection: .runningAppsArea, frame: zoneRect)]
-        }
+        guard !apps.isEmpty else { return [] }
 
         let cardWidth = layoutProfile.runningCardWidth
         let spacing = layoutProfile.runningCardSpacing
@@ -1293,7 +1327,8 @@ struct ArrangeBoardView: View {
                     y: origin.y,
                     width: cardWidth,
                     height: 56
-                )
+                ),
+                region: .runningApps
             )
         }
     }
@@ -1320,7 +1355,8 @@ struct ArrangeBoardView: View {
                     y: origin.y,
                     width: cardWidth,
                     height: 60
-                )
+                ),
+                region: .activeModes
             )
         }
     }

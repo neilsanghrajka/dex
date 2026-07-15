@@ -7,6 +7,13 @@ enum BoardNavigationDirection {
     case down
 }
 
+enum BoardNavigationRegion: Hashable {
+    case role(ColumnRole)
+    case openWindows
+    case runningApps
+    case activeModes
+}
+
 enum BoardNavigationGeometry {
     private static let directionThreshold: CGFloat = 8
     private static let alignmentTolerance: CGFloat = 12
@@ -28,6 +35,109 @@ enum BoardNavigationGeometry {
                     direction: direction
                 )
             }
+    }
+
+    static func semanticTargetIndex(
+        from origin: CGRect,
+        currentRegion: BoardNavigationRegion,
+        candidates: [CGRect],
+        candidateRegions: [BoardNavigationRegion],
+        roleFrames: [ColumnRole: CGRect],
+        direction: BoardNavigationDirection
+    ) -> Int? {
+        guard candidates.count == candidateRegions.count else { return nil }
+        guard !direction.isHorizontal else {
+            return targetIndex(from: origin, candidates: candidates, direction: direction)
+        }
+
+        switch currentRegion {
+        case .role(let role):
+            if let target = targetIndex(
+                from: origin,
+                candidates: candidates,
+                regions: candidateRegions,
+                matching: { $0 == .role(role) },
+                direction: direction
+            ) {
+                return target
+            }
+
+            if let currentRoleFrame = roleFrames[role] {
+                let verticallyAdjacentRoles: Set<ColumnRole> = Set(roleFrames.compactMap { candidateRole, frame in
+                    guard candidateRole != role,
+                          intervalGap(
+                              currentRoleFrame.minX...currentRoleFrame.maxX,
+                              frame.minX...frame.maxX
+                          ) == 0,
+                          isCandidate(frame, in: direction, from: currentRoleFrame) else {
+                        return nil
+                    }
+                    return candidateRole
+                })
+                if let target = targetIndex(
+                    from: origin,
+                    candidates: candidates,
+                    regions: candidateRegions,
+                    matching: { region in
+                        guard case .role(let candidateRole) = region else { return false }
+                        return verticallyAdjacentRoles.contains(candidateRole)
+                    },
+                    direction: direction
+                ) {
+                    return target
+                }
+            }
+
+            guard direction == .down else { return nil }
+            return targetIndex(
+                from: origin,
+                candidates: candidates,
+                regions: candidateRegions,
+                matching: { $0 == .openWindows },
+                direction: direction
+            )
+
+        case .openWindows:
+            let destinationRegions: Set<BoardNavigationRegion> = direction == .down
+                ? [.runningApps, .activeModes]
+                : Set(roleFrames.keys.map(BoardNavigationRegion.role))
+            return targetIndex(
+                from: origin,
+                candidates: candidates,
+                regions: candidateRegions,
+                matching: { destinationRegions.contains($0) },
+                direction: direction
+            )
+
+        case .runningApps, .activeModes:
+            guard direction == .up else { return nil }
+            return targetIndex(
+                from: origin,
+                candidates: candidates,
+                regions: candidateRegions,
+                matching: { $0 == .openWindows },
+                direction: direction
+            )
+        }
+    }
+
+    private static func targetIndex(
+        from origin: CGRect,
+        candidates: [CGRect],
+        regions: [BoardNavigationRegion],
+        matching predicate: (BoardNavigationRegion) -> Bool,
+        direction: BoardNavigationDirection
+    ) -> Int? {
+        let matchingIndices = candidates.indices.filter { predicate(regions[$0]) }
+        let matchingFrames = matchingIndices.map { candidates[$0] }
+        guard let localTarget = targetIndex(
+            from: origin,
+            candidates: matchingFrames,
+            direction: direction
+        ) else {
+            return nil
+        }
+        return matchingIndices[localTarget]
     }
 
     private static func isCandidate(

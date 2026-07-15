@@ -132,6 +132,68 @@ final class CompactBoardGeometryTests: XCTestCase {
         )
     }
 
+    func testVerticalNavigationStaysInRoleBeforeEnteringShelves() {
+        let origin = CGRect(x: 40, y: 60, width: 180, height: 120)
+        let runningApps = CGRect(x: 400, y: 720, width: 700, height: 80)
+        let openWindow = CGRect(x: 500, y: 520, width: 180, height: 120)
+        let lowerLeftWindow = CGRect(x: 40, y: 250, width: 180, height: 120)
+        let candidates = [runningApps, openWindow, lowerLeftWindow]
+        let regions: [BoardNavigationRegion] = [.runningApps, .openWindows, .role(.left)]
+
+        XCTAssertEqual(
+            BoardNavigationGeometry.semanticTargetIndex(
+                from: origin,
+                currentRegion: .role(.left),
+                candidates: candidates,
+                candidateRegions: regions,
+                roleFrames: [.left: CGRect(x: 20, y: 20, width: 300, height: 650)],
+                direction: .down
+            ),
+            2
+        )
+    }
+
+    func testVerticalNavigationVisitsOpenWindowsBeforeRunningAppsRegardlessOfCardAlignment() {
+        let origin = CGRect(x: 400, y: 80, width: 180, height: 120)
+        let runningApps = CGRect(x: 380, y: 720, width: 700, height: 80)
+        let diagonallyPlacedOpenWindow = CGRect(x: 850, y: 500, width: 180, height: 120)
+
+        XCTAssertEqual(
+            BoardNavigationGeometry.semanticTargetIndex(
+                from: origin,
+                currentRegion: .role(.center),
+                candidates: [runningApps, diagonallyPlacedOpenWindow],
+                candidateRegions: [.runningApps, .openWindows],
+                roleFrames: [.center: CGRect(x: 320, y: 20, width: 900, height: 450)],
+                direction: .down
+            ),
+            1
+        )
+    }
+
+    func testVerticalNavigationUsesGenuinelyStackedRoleBeforeOpenWindows() {
+        let origin = CGRect(x: 40, y: 40, width: 180, height: 120)
+        let openWindow = CGRect(x: 500, y: 600, width: 180, height: 120)
+        let bottomLeft = CGRect(x: 40, y: 300, width: 180, height: 120)
+        let roleFrames: [ColumnRole: CGRect] = [
+            .topLeft: CGRect(x: 20, y: 20, width: 300, height: 250),
+            .bottomLeft: CGRect(x: 20, y: 280, width: 300, height: 250),
+            .right: CGRect(x: 330, y: 20, width: 600, height: 510)
+        ]
+
+        XCTAssertEqual(
+            BoardNavigationGeometry.semanticTargetIndex(
+                from: origin,
+                currentRegion: .role(.topLeft),
+                candidates: [openWindow, bottomLeft],
+                candidateRegions: [.openWindows, .role(.bottomLeft)],
+                roleFrames: roleFrames,
+                direction: .down
+            ),
+            1
+        )
+    }
+
     func testTwoByTwoNavigationFollowsRowsAndColumns() {
         let topLeft = CGRect(x: 0, y: 0, width: 180, height: 120)
         let topRight = CGRect(x: 220, y: 0, width: 180, height: 120)
