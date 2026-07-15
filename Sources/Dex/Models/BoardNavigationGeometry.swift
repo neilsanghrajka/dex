@@ -93,7 +93,10 @@ enum BoardNavigationGeometry {
                 from: origin,
                 candidates: candidates,
                 regions: candidateRegions,
-                matching: { $0 == .openWindows },
+                preferredRegionGroups: [
+                    [.openWindows],
+                    [.runningApps, .activeModes]
+                ],
                 direction: direction
             )
 
@@ -115,10 +118,34 @@ enum BoardNavigationGeometry {
                 from: origin,
                 candidates: candidates,
                 regions: candidateRegions,
-                matching: { $0 == .openWindows },
+                preferredRegionGroups: [
+                    [.openWindows],
+                    Set(roleFrames.keys.map(BoardNavigationRegion.role))
+                ],
                 direction: direction
             )
         }
+    }
+
+    private static func targetIndex(
+        from origin: CGRect,
+        candidates: [CGRect],
+        regions: [BoardNavigationRegion],
+        preferredRegionGroups: [Set<BoardNavigationRegion>],
+        direction: BoardNavigationDirection
+    ) -> Int? {
+        for group in preferredRegionGroups {
+            if let target = targetIndex(
+                from: origin,
+                candidates: candidates,
+                regions: regions,
+                matching: { group.contains($0) },
+                direction: direction
+            ) {
+                return target
+            }
+        }
+        return nil
     }
 
     private static func targetIndex(

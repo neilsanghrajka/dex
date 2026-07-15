@@ -230,6 +230,64 @@ final class CompactBoardGeometryTests: XCTestCase {
         )
     }
 
+    func testDownSkipsEmptyOpenWindowsForEveryLayoutAndPresentation() {
+        let sizes = [
+            CGSize(width: 1_920, height: 1_000),
+            CGSize(width: 760, height: 420)
+        ]
+
+        for size in sizes {
+            for kind in BoardLayoutKind.allCases {
+                let grid = GridLayout(
+                    visibleFrame: CGRect(origin: .zero, size: size),
+                    gutter: 10,
+                    kind: kind
+                )
+                let roleFrames = Dictionary(uniqueKeysWithValues: grid.roles.map {
+                    ($0, navigationCardFrame(for: $0, in: grid))
+                })
+                let runningApp = CGRect(
+                    x: size.width * 0.4,
+                    y: size.height + 160,
+                    width: size.width * 0.2,
+                    height: 80
+                )
+
+                for role in grid.roles {
+                    XCTAssertEqual(
+                        BoardNavigationGeometry.semanticTargetIndex(
+                            from: navigationCardFrame(for: role, in: grid),
+                            currentRegion: .role(role),
+                            candidates: [runningApp],
+                            candidateRegions: [.runningApps],
+                            roleFrames: roleFrames,
+                            direction: .down
+                        ),
+                        0,
+                        "Expected \(kind) / \(role) at \(size) to skip an empty Open Windows shelf"
+                    )
+                }
+            }
+        }
+    }
+
+    func testUpSkipsEmptyOpenWindowsFromBottomShelf() {
+        let assignedWindow = CGRect(x: 400, y: 80, width: 180, height: 120)
+        let runningApp = CGRect(x: 400, y: 720, width: 180, height: 80)
+
+        XCTAssertEqual(
+            BoardNavigationGeometry.semanticTargetIndex(
+                from: runningApp,
+                currentRegion: .runningApps,
+                candidates: [assignedWindow],
+                candidateRegions: [.role(.center)],
+                roleFrames: [.center: CGRect(x: 320, y: 20, width: 900, height: 450)],
+                direction: .up
+            ),
+            0
+        )
+    }
+
     func testVerticalNavigationUsesGenuinelyStackedRoleBeforeOpenWindows() {
         let origin = CGRect(x: 40, y: 40, width: 180, height: 120)
         let openWindow = CGRect(x: 500, y: 600, width: 180, height: 120)
