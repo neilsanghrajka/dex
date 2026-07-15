@@ -84,6 +84,9 @@ final class AppModel: ObservableObject {
     /// Retains exact AX handles for windows minimized from the board so the Running Apps
     /// shelf restores them before applying an app's "open a new window" rule.
     private var minimizedBoardWindows: [String: ManagedWindow] = [:]
+    /// Session-local reversible F/W transforms. Restoring returns the exact prior
+    /// position and size while the window remains in Open Windows.
+    private var windowTransformStates: [String: BoardWindowTransformState] = [:]
 
     init() {
         self.arrangeAllDisplays = store.arrangeAllDisplays
@@ -522,6 +525,7 @@ final class AppModel: ObservableObject {
 
     @discardableResult
     func assign(windowID: String, to role: ColumnRole, displayID: String) -> Bool {
+        windowTransformStates.removeValue(forKey: windowID)
         removeWindowFromActiveWorkspaceStacks(windowID)
         var state = stackState(for: displayID)
         state.assign(windowID, to: role)
@@ -647,7 +651,11 @@ final class AppModel: ObservableObject {
     }
 
     @discardableResult
-    func maximizeBoardWindow(windowID: String, displayID: String) -> Bool {
+    func toggleBoardWindowTransform(
+        windowID: String,
+        displayID: String,
+        transform: BoardWindowTransform
+    ) -> Bool {
         guard let window = windows.first(where: { $0.id == windowID }) else {
             showHUD("Window not found")
             return false
@@ -657,23 +665,40 @@ final class AppModel: ObservableObject {
             refocusArrangeBoardIfNeeded()
             return false
         }
-        let maximizedFrame = MaximizedWindowGeometry.frame(visibleFrame: display.visibleFrame)
-        guard accessibility.moveResize(window, to: maximizedFrame) else {
-            showHUD("Could not maximize \(window.displayTitle)")
+        let transition = BoardWindowTransformLogic.transition(
+            currentState: windowTransformStates[windowID],
+            requestedTransform: transform,
+            currentFrame: window.frame,
+            visibleFrame: display.visibleFrame
+        )
+        let targetFrame: CGRect
+        switch transition {
+        case .apply(let frame, _), .restore(let frame):
+            targetFrame = frame
+        }
+        guard accessibility.moveResize(window, to: targetFrame) else {
+            showHUD("Could not resize \(window.displayTitle)")
             refocusArrangeBoardIfNeeded()
             return false
         }
 
-        removeWindowFromActiveWorkspaceStacks(windowID)
-        saveWorkspaceStacks()
-        showHUD("Maximized \(window.displayTitle)")
+        switch transition {
+        case .apply(_, let nextState):
+            windowTransformStates[windowID] = nextState
+            removeWindowFromActiveWorkspaceStacks(windowID)
+            saveWorkspaceStacks()
+            showHUD("\(transform.actionName) \(window.displayTitle)")
+        case .restore:
+            windowTransformStates.removeValue(forKey: windowID)
+            showHUD("Restored \(window.displayTitle)")
+        }
         refocusArrangeBoardIfNeeded()
         refreshThumbnailsAfterWindowGeometryChange()
         return true
     }
 
-    func showMaximizeWindowSelectionHint() {
-        showHUD("Select a window to maximize")
+    func showResizeWindowSelectionHint() {
+        showHUD("Select a window to resize")
         refocusArrangeBoardIfNeeded()
     }
 
@@ -2139,6 +2164,7 @@ final class AppModel: ObservableObject {
     }
 
     private func removeWindowFromAllStacks(_ windowID: String) {
+        windowTransformStates.removeValue(forKey: windowID)
         for key in Array(stacksByWorkspace.keys) {
             var state = stacksByWorkspace[key, default: ColumnStackState()]
             state.remove(windowID)

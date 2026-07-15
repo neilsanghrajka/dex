@@ -44,6 +44,10 @@ final class AppShortcutBindingTests: XCTestCase {
             .reserved("M")
         )
         XCTAssertEqual(
+            AppShortcutKeyValidation.validate(pressedCharacter: "w", for: bindings[0].id, in: bindings),
+            .reserved("W")
+        )
+        XCTAssertEqual(
             AppShortcutKeyValidation.validate(pressedCharacter: "/", for: bindings[0].id, in: bindings),
             .reserved("/")
         )

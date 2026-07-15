@@ -67,6 +67,7 @@ final class BoardShortcutValidationTests: XCTestCase {
         XCTAssertFalse(BoardShortcutValidation.isValid("f", for: .terminal, in: defaultMappings(updating: .terminal, to: "f")))
         XCTAssertFalse(BoardShortcutValidation.isValid("q", for: .terminal, in: defaultMappings(updating: .terminal, to: "q")))
         XCTAssertFalse(BoardShortcutValidation.isValid("m", for: .terminal, in: defaultMappings(updating: .terminal, to: "m")))
+        XCTAssertFalse(BoardShortcutValidation.isValid("w", for: .terminal, in: defaultMappings(updating: .terminal, to: "w")))
         XCTAssertTrue(BoardShortcutValidation.isValid("x", for: .codex, in: defaultMappings(updating: .codex, to: "x")))
     }
 

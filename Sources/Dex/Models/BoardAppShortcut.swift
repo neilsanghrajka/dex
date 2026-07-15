@@ -92,7 +92,7 @@ enum BoardAppShortcut: String, CaseIterable, Codable, Identifiable {
 }
 
 enum BoardShortcutValidation {
-    static let reservedSequences: Set<String> = ["f", "m", "q"]
+    static let reservedSequences: Set<String> = ["f", "m", "q", "w"]
 
     static func clean(_ sequence: String) -> String {
         sequence
