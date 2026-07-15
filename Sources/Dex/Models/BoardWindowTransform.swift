@@ -3,25 +3,13 @@ import Foundation
 
 enum BoardWindowTransform: Equatable {
     case maximized
-    case wide
 
     func targetFrame(visibleFrame: CGRect) -> CGRect {
-        switch self {
-        case .maximized:
-            MaximizedWindowGeometry.frame(visibleFrame: visibleFrame)
-        case .wide:
-            GridLayout(
-                visibleFrame: visibleFrame,
-                kind: .leftNarrowCenter
-            ).rect(for: .right)
-        }
+        MaximizedWindowGeometry.frame(visibleFrame: visibleFrame)
     }
 
     var actionName: String {
-        switch self {
-        case .maximized: "Maximized"
-        case .wide: "Made wide"
-        }
+        "Maximized"
     }
 }
 

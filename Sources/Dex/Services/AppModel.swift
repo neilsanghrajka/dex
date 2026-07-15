@@ -668,7 +668,7 @@ final class AppModel: ObservableObject {
         let transition = BoardWindowTransformLogic.transition(
             currentState: windowTransformStates[windowID],
             requestedTransform: transform,
-            currentFrame: window.frame,
+            currentFrame: assignedBoardFrame(windowID: windowID, on: display) ?? window.frame,
             visibleFrame: display.visibleFrame
         )
         let targetFrame: CGRect
@@ -699,6 +699,77 @@ final class AppModel: ObservableObject {
 
     func showResizeWindowSelectionHint() {
         showHUD("Select a window to resize")
+        refocusArrangeBoardIfNeeded()
+    }
+
+    @discardableResult
+    func makeBoardWindowWide(windowID: String, displayID: String) -> Bool {
+        guard let window = windows.first(where: { $0.id == windowID }) else {
+            showHUD("Window not found")
+            return false
+        }
+        guard let display = display(withID: displayID) else {
+            showHUD("Display not found")
+            refocusArrangeBoardIfNeeded()
+            return false
+        }
+
+        let activeWorkspaceKey = workspaceKey(for: displayID)
+        let previousGrid = grid(for: display)
+        let previousLayoutKinds = layoutKindsByWorkspace
+        let previousWorkspaceStacks = stacksByWorkspace
+        let nextGrid = GridLayout(
+            visibleFrame: display.visibleFrame,
+            kind: WideBoardPlacement.layoutKind
+        )
+
+        layoutKindsByWorkspace[activeWorkspaceKey] = WideBoardPlacement.layoutKind
+        _ = reflowCurrentWorkspaceStack(
+            for: displayID,
+            workspaceKey: activeWorkspaceKey,
+            previousGrid: previousGrid,
+            nextGrid: nextGrid
+        )
+
+        let nextState = WideBoardPlacement.placing(
+            windowID: windowID,
+            in: stackState(for: displayID)
+        )
+        setStackState(nextState, for: displayID, save: false)
+        stacksByWorkspace[
+            layoutMemoryKey(
+                workspaceKey: activeWorkspaceKey,
+                kind: WideBoardPlacement.layoutKind
+            )
+        ] = nextState
+        let arranged = arrangeAssignedWindows(
+            displayIDs: Set([displayID]),
+            raiseActiveWindows: !isArrangeBoardVisible
+        )
+        guard arranged else {
+            layoutKindsByWorkspace = previousLayoutKinds
+            stacksByWorkspace = previousWorkspaceStacks
+            saveWorkspaceStacks()
+            _ = arrangeAssignedWindows(
+                displayIDs: Set([displayID]),
+                raiseActiveWindows: !isArrangeBoardVisible
+            )
+            showHUD("Could not make \(window.displayTitle) wide")
+            refocusArrangeBoardIfNeeded()
+            return false
+        }
+
+        windowTransformStates.removeValue(forKey: windowID)
+        store.saveDisplayLayoutKinds(layoutKindsByWorkspace)
+        saveWorkspaceStacks()
+        showHUD("Narrow L: \(window.displayTitle) wide")
+        refocusArrangeBoardIfNeeded()
+        refreshThumbnailsAfterWindowGeometryChange()
+        return true
+    }
+
+    func showWideWindowSelectionHint() {
+        showHUD("Select a window to make wide")
         refocusArrangeBoardIfNeeded()
     }
 
@@ -2147,6 +2218,15 @@ final class AppModel: ObservableObject {
     private func windows(on displayID: String) -> [ManagedWindow] {
         guard let display = display(withID: displayID) else { return windows }
         return windows(on: display)
+    }
+
+    private func assignedBoardFrame(windowID: String, on display: DisplayInfo) -> CGRect? {
+        let grid = grid(for: display)
+        guard let role = stackState(for: display.id).column(containing: windowID),
+              grid.roles.contains(role) else {
+            return nil
+        }
+        return grid.rect(for: role)
     }
 
     private func displayID(for window: ManagedWindow) -> String? {

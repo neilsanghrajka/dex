@@ -1023,7 +1023,7 @@ struct ArrangeBoardView: View {
             closeSelectedItem()
             return true
         case "w" where !flags.contains(.shift):
-            toggleSelectedWindowTransform(.wide)
+            makeSelectedWindowWide()
             return true
         default:
             return handleAppShortcut(event)
@@ -1537,6 +1537,18 @@ struct ArrangeBoardView: View {
             return
         }
         selection = .unassigned(windowID)
+    }
+
+    private func makeSelectedWindowWide() {
+        guard let windowID = selection?.windowID else {
+            model.showWideWindowSelectionHint()
+            return
+        }
+        guard model.makeBoardWindowWide(windowID: windowID, displayID: display.id) else {
+            return
+        }
+        activeColumnRole = WideBoardPlacement.role
+        selection = .assigned(WideBoardPlacement.role, windowID)
     }
 
     private func selectionAfterMinimizing(_ windowID: String) -> BoardSelection? {
@@ -2746,6 +2758,7 @@ final class BoardKeyboardCaptureView: NSView {
     var hidesMenuBarWhenFocused = false
     var onKeyDown: ((NSEvent) -> Bool)?
     private var directionalKeyPressGate = BoardDirectionalKeyPressGate()
+    private var didBecomeKeyObserver: NSObjectProtocol?
 
     override var acceptsFirstResponder: Bool {
         true
@@ -2753,9 +2766,26 @@ final class BoardKeyboardCaptureView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        stopObservingWindowFocus()
         if window == nil {
             directionalKeyPressGate.reset()
             return
+        }
+        if let window {
+            didBecomeKeyObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didBecomeKeyNotification,
+                object: window,
+                queue: .main
+            ) { [weak self, weak window] _ in
+                DispatchQueue.main.async {
+                    guard let self,
+                          let window,
+                          self.window === window else {
+                        return
+                    }
+                    self.claimKeyboardFocus()
+                }
+            }
         }
         DispatchQueue.main.async { [weak self] in
             guard let self,
@@ -2798,6 +2828,17 @@ final class BoardKeyboardCaptureView: NSView {
     override func resignFirstResponder() -> Bool {
         directionalKeyPressGate.reset()
         return super.resignFirstResponder()
+    }
+
+    deinit {
+        stopObservingWindowFocus()
+    }
+
+    private func stopObservingWindowFocus() {
+        if let didBecomeKeyObserver {
+            NotificationCenter.default.removeObserver(didBecomeKeyObserver)
+            self.didBecomeKeyObserver = nil
+        }
     }
 }
 
@@ -3419,7 +3460,7 @@ private struct BoardPaletteOverlay: View {
                 ShortcutHelpRow(keys: "Enter", label: "Open selected item")
                 ShortcutHelpRow(keys: "Double-click", label: "Open and promote")
                 ShortcutHelpRow(keys: "F", label: "Toggle maximize")
-                ShortcutHelpRow(keys: "W", label: "Toggle wide right")
+                ShortcutHelpRow(keys: "W", label: "Narrow L + selected wide")
                 ShortcutHelpRow(keys: "M", label: "Minimize selected window")
                 ShortcutHelpRow(keys: "Q", label: "Close or quit selected")
                 ShortcutHelpRow(keys: "Option + Tab", label: "Switch area")
