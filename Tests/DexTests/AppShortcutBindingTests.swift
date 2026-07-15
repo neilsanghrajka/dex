@@ -36,6 +36,10 @@ final class AppShortcutBindingTests: XCTestCase {
             .reserved("Q")
         )
         XCTAssertEqual(
+            AppShortcutKeyValidation.validate(pressedCharacter: "m", for: bindings[0].id, in: bindings),
+            .reserved("M")
+        )
+        XCTAssertEqual(
             AppShortcutKeyValidation.validate(pressedCharacter: "/", for: bindings[0].id, in: bindings),
             .reserved("/")
         )
@@ -102,6 +106,38 @@ final class AppShortcutBindingTests: XCTestCase {
         XCTAssertEqual(loaded.last?.key, "n")
     }
 
+    func testStoredMShortcutIsClearedAndPersisted() throws {
+        let suiteName = "DexTests.appShortcutBindings.reservedMMigration"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let store = LayoutStore(defaults: defaults)
+
+        let bindings = [
+            AppShortcutBinding(
+                displayName: "Mail",
+                bundleIdentifiers: ["com.apple.mail"],
+                appNames: ["Mail"],
+                key: "m",
+                preferNewWindow: false
+            ),
+            AppShortcutBinding(
+                displayName: "Terminal",
+                bundleIdentifiers: ["com.apple.Terminal"],
+                appNames: ["Terminal"],
+                key: "t",
+                preferNewWindow: true
+            )
+        ]
+        store.saveAppShortcutBindings(bindings)
+
+        let loaded = store.loadAppShortcutBindings()
+        XCTAssertEqual(loaded.map(\.key), ["", "t"])
+
+        let persistedData = try XCTUnwrap(defaults.data(forKey: "dex.appShortcutBindings"))
+        let persisted = try JSONDecoder().decode([AppShortcutBinding].self, from: persistedData)
+        XCTAssertEqual(persisted.map(\.key), ["", "t"])
+    }
+
     func testMigratesLegacyMappingsOntoDefaultBindings() throws {
         let suiteName = "DexTests.appShortcutBindings.migration"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -118,6 +154,20 @@ final class AppShortcutBindingTests: XCTestCase {
         XCTAssertEqual(migrated.first(where: { $0.displayName == "Terminal" })?.key, "z")
         XCTAssertEqual(migrated.first(where: { $0.displayName == "Claude" })?.key, "c")
         XCTAssertEqual(migrated.count, BoardAppShortcut.allCases.count)
+    }
+
+    func testLegacyMMappingFallsBackToDefaultBinding() {
+        let suiteName = "DexTests.appShortcutBindings.reservedMLegacyMigration"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let store = LayoutStore(defaults: defaults)
+
+        var mappings = Dictionary(uniqueKeysWithValues: BoardAppShortcut.allCases.map { ($0, $0.defaultKeySequence) })
+        mappings[.terminal] = "m"
+        store.saveShortcutMappings(mappings)
+
+        let migrated = store.loadAppShortcutBindings()
+        XCTAssertEqual(migrated.first(where: { $0.displayName == "Terminal" })?.key, "t")
     }
 
     func testStoredBindingsTakePrecedenceOverLegacyMigration() {

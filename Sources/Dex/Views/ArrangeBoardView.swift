@@ -791,6 +791,9 @@ struct ArrangeBoardView: View {
         case "/":
             showPalette()
             return true
+        case "m" where !flags.contains(.shift):
+            minimizeSelectedWindow()
+            return true
         case "q":
             // Q closes/quits the selected item. Suppress it during the tour so a stray
             // press can't destroy the user's windows while they're being taught; the
@@ -1239,6 +1242,69 @@ struct ArrangeBoardView: View {
 
         selection = selectionAfterRemovingRunningApp(appID)
         model.quitRunningApplication(item)
+    }
+
+    private func minimizeSelectedWindow() {
+        guard let windowID = selection?.windowID else {
+            model.showMinimizeWindowSelectionHint()
+            return
+        }
+
+        let nextSelection = selectionAfterMinimizing(windowID)
+        guard model.minimizeBoardWindow(windowID: windowID) else {
+            return
+        }
+        if let role = nextSelection?.role {
+            activeColumnRole = role
+        }
+        selection = nextSelection
+    }
+
+    private func selectionAfterMinimizing(_ windowID: String) -> BoardSelection? {
+        guard let selection else { return nil }
+
+        switch selection {
+        case .assigned(let role, _):
+            let windows = windows(for: role)
+            let remaining = windows.filter { $0.id != windowID }
+            if !remaining.isEmpty {
+                let currentIndex = windows.firstIndex(where: { $0.id == windowID }) ?? 0
+                let nextIndex = min(currentIndex, remaining.count - 1)
+                return .assigned(role, remaining[nextIndex].id)
+            }
+            return nearestRemainingSelection(excludingWindowID: windowID) ?? .column(role)
+        case .unassigned:
+            let windows = model.unassignedWindows(on: display)
+            let remaining = windows.filter { $0.id != windowID }
+            if !remaining.isEmpty {
+                let currentIndex = windows.firstIndex(where: { $0.id == windowID }) ?? 0
+                let nextIndex = min(currentIndex, remaining.count - 1)
+                return .unassigned(remaining[nextIndex].id)
+            }
+            return nearestRemainingSelection(excludingWindowID: windowID) ?? .unassignedArea
+        case .column, .unassignedArea, .runningAppsArea, .runningApplication, .activeModesArea, .activeMode:
+            return selection
+        }
+    }
+
+    private func nearestRemainingSelection(excludingWindowID windowID: String) -> BoardSelection? {
+        let candidates = visualNavigationCandidates()
+        guard let origin = candidates.first(where: { $0.selection == selection })?.center else {
+            return candidates.first(where: { $0.selection.windowID != windowID })?.selection
+        }
+
+        return candidates
+            .filter { $0.selection.windowID != windowID }
+            .min { lhs, rhs in
+                let lhsDX = lhs.center.x - origin.x
+                let lhsDY = lhs.center.y - origin.y
+                let rhsDX = rhs.center.x - origin.x
+                let rhsDY = rhs.center.y - origin.y
+                let lhsDistance = lhsDX * lhsDX + lhsDY * lhsDY
+                let rhsDistance = rhsDX * rhsDX + rhsDY * rhsDY
+                return lhsDistance < rhsDistance
+            }?
+            .selection
     }
 
     private func selectionAfterRemoving(_ windowID: String) -> BoardSelection? {
@@ -2956,6 +3022,7 @@ private struct BoardPaletteOverlay: View {
                 ShortcutHelpRow(keys: "Arrows", label: "Move selection")
                 ShortcutHelpRow(keys: "Enter", label: "Open selected item")
                 ShortcutHelpRow(keys: "Double-click", label: "Open and promote")
+                ShortcutHelpRow(keys: "M", label: "Minimize selected window")
                 ShortcutHelpRow(keys: "Q", label: "Close or quit selected")
                 ShortcutHelpRow(keys: "Option + Tab", label: "Switch area")
                 ShortcutHelpRow(keys: "Option + Arrows", label: "Move/open into column")
@@ -3696,7 +3763,7 @@ private struct TourCoachCard: View {
         case .shortcut:
             return "Each key opens (or moves) its app straight into the focused column."
         case .closing:
-            return "/ opens the palette · ⌥S saves this layout as a Group · ⌥1–9 recalls Groups · Q closes things · Esc leaves"
+            return "/ opens the palette · ⌥S saves this layout as a Group · ⌥1–9 recalls Groups · M minimizes · Q closes things · Esc leaves"
         }
     }
 }
@@ -3711,6 +3778,7 @@ private struct BoardLegendBar: View {
             legendItem("/", "Palette")
             legendItem("⌥S", "Save Group")
             legendItem("⌥1–9", "Groups")
+            legendItem("M", "Minimize")
             legendItem("Q", "Close")
             legendItem("Esc", "Leave")
 

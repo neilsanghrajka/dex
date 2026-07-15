@@ -76,6 +76,9 @@ final class AppModel: ObservableObject {
     private var activeSpaceObserver: NSObjectProtocol?
     private var lastObservedMainSpaceID: String?
     private var pendingBoardFocusRequest: BoardFocusRequest?
+    /// Retains exact AX handles for windows minimized from the board so the Running Apps
+    /// shelf restores them before applying an app's "open a new window" rule.
+    private var minimizedBoardWindows: [String: ManagedWindow] = [:]
 
     init() {
         self.arrangeAllDisplays = store.arrangeAllDisplays
@@ -605,6 +608,34 @@ final class AppModel: ObservableObject {
         }
     }
 
+    @discardableResult
+    func minimizeBoardWindow(windowID: String) -> Bool {
+        guard let window = windows.first(where: { $0.id == windowID }) else {
+            showHUD("Window not found")
+            return false
+        }
+        guard accessibility.minimize(window) else {
+            showHUD("Could not minimize \(window.displayTitle)")
+            refocusArrangeBoardIfNeeded()
+            return false
+        }
+
+        minimizedBoardWindows[window.id] = window
+        showHUD("Minimized \(window.displayTitle)")
+        refocusArrangeBoardIfNeeded()
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            await refreshWindows(includeThumbnails: true)
+            refocusArrangeBoardIfNeeded()
+        }
+        return true
+    }
+
+    func showMinimizeWindowSelectionHint() {
+        showHUD("Select a window to minimize")
+        refocusArrangeBoardIfNeeded()
+    }
+
     func cleanupCandidates(on display: DisplayInfo) -> [CleanupCandidate] {
         windows(on: display).compactMap { window in
             let haystack = "\(window.appName) \(window.bundleIdentifier) \(window.title)".lowercased()
@@ -791,6 +822,23 @@ final class AppModel: ObservableObject {
         in role: ColumnRole,
         displayID: String
     ) async {
+        if let minimizedWindow = minimizedBoardWindows.values.first(where: { windowMatches($0, item: item) }) {
+            minimizedBoardWindows[minimizedWindow.id] = nil
+            if accessibility.restore(minimizedWindow) {
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                await refreshWindows(includeThumbnails: true)
+                if let restored = firstWindow(matching: item) {
+                    assign(windowID: restored.id, to: role, displayID: displayID)
+                    accessibility.raise(restored)
+                    showHUD("Restored \(item.name) in \(role.title)")
+                } else {
+                    showHUD("Restored \(item.name)")
+                }
+                refocusArrangeBoardIfNeeded()
+                return
+            }
+        }
+
         if newWindowLaunchRule(matching: item) != nil {
             await openLaunchTarget(launchSpec(for: item), launchURL: item.url, in: role, displayID: displayID)
             return

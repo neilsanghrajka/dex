@@ -62,11 +62,11 @@ extension AppShortcutBinding {
 /// Validation for assigning a key to an `AppShortcutBinding`.
 ///
 /// Fixed grammar keys are never configurable. The recorder only ever offers a
-/// letter/digit character to this validator; reserved literals (`Q`, `/`) are
+/// letter/digit character to this validator; reserved literals (`Q`, `M`, `/`) are
 /// rejected here with a reason the UI can surface.
 enum AppShortcutKeyValidation {
     /// Alphanumeric keys that stay reserved for the board grammar.
-    static let reservedKeys: Set<String> = ["q"]
+    static let reservedKeys: Set<String> = ["m", "q"]
 
     enum Result: Equatable {
         case valid(key: String)

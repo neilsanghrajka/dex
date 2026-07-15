@@ -24,6 +24,50 @@ final class RunningApplicationFilterTests: XCTestCase {
         XCTAssertEqual(hidden.map(\.name), ["Claude"])
     }
 
+    func testAppAppearsWhenItsLastVisibleWindowIsMinimized() {
+        let candidates = [
+            RunningApplicationItem(
+                name: "Codex",
+                bundleIdentifier: "com.openai.codex",
+                url: nil,
+                processIdentifier: 101
+            )
+        ]
+
+        let hidden = RunningApplicationFilter.hiddenApplications(
+            candidates: candidates,
+            visibleWindows: [],
+            dexBundleIdentifier: "com.neilsanghrajka.Dex"
+        )
+
+        XCTAssertEqual(hidden.map(\.name), ["Codex"])
+    }
+
+    func testAppStaysOutOfShelfWhenAnotherWindowRemainsVisible() {
+        let remainingCodexWindow = makeWindow(
+            id: "remaining-codex-window",
+            pid: 101,
+            appName: "Codex",
+            bundleIdentifier: "com.openai.codex"
+        )
+        let candidates = [
+            RunningApplicationItem(
+                name: "Codex",
+                bundleIdentifier: "com.openai.codex",
+                url: nil,
+                processIdentifier: 101
+            )
+        ]
+
+        let hidden = RunningApplicationFilter.hiddenApplications(
+            candidates: candidates,
+            visibleWindows: [remainingCodexWindow],
+            dexBundleIdentifier: "com.neilsanghrajka.Dex"
+        )
+
+        XCTAssertTrue(hidden.isEmpty)
+    }
+
     func testFiltersDexAndDeduplicatesByStableID() {
         let candidates = [
             RunningApplicationItem(name: "Dex", bundleIdentifier: "com.neilsanghrajka.Dex", url: nil, processIdentifier: 1),

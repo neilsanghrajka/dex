@@ -138,7 +138,17 @@ final class LayoutStore {
     func loadAppShortcutBindings() -> [AppShortcutBinding] {
         if let data = defaults.data(forKey: appShortcutBindingsKey),
            let decoded = try? JSONDecoder().decode([AppShortcutBinding].self, from: data) {
-            return decoded
+            let migrated = decoded.map { binding in
+                var binding = binding
+                if BoardShortcutValidation.clean(binding.key) == "m" {
+                    binding.key = ""
+                }
+                return binding
+            }
+            if migrated != decoded {
+                saveAppShortcutBindings(migrated)
+            }
+            return migrated
         }
 
         // First run on this build: start from the default set and migrate any legacy

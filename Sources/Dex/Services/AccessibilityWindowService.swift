@@ -35,6 +35,24 @@ final class AccessibilityWindowService {
         AXUIElementPerformAction(window.axElement, kAXRaiseAction as CFString)
     }
 
+    @discardableResult
+    func minimize(_ window: ManagedWindow) -> Bool {
+        AXUIElementSetAttributeValue(
+            window.axElement,
+            kAXMinimizedAttribute as CFString,
+            kCFBooleanTrue
+        ) == .success
+    }
+
+    @discardableResult
+    func restore(_ window: ManagedWindow) -> Bool {
+        AXUIElementSetAttributeValue(
+            window.axElement,
+            kAXMinimizedAttribute as CFString,
+            kCFBooleanFalse
+        ) == .success
+    }
+
     func closeWindowOnly(_ window: ManagedWindow) {
         if let closeButton = copyAttribute(window.axElement, kAXCloseButtonAttribute) as! AXUIElement? {
             AXUIElementPerformAction(closeButton, kAXPressAction as CFString)
