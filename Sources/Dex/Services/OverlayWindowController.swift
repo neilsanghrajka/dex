@@ -7,6 +7,8 @@ final class OverlayWindowController {
     private var arrangeWindows: [NSWindow] = []
     private var snapWindows: [NSWindow] = []
     private var screenParametersObserver: NSObjectProtocol?
+    private var applicationDidBecomeActiveObserver: NSObjectProtocol?
+    private var preferredInputDisplayID: String?
     private var menuBarVisibilityBeforeCompactBoard: Bool?
     private var pendingCompactDismissals = 0
 
@@ -16,8 +18,10 @@ final class OverlayWindowController {
         presentationMode: BoardPresentationMode
     ) {
         closeArrangeBoard()
-        activateApplicationForBoard()
         let inputDisplayID = model.activeBoardDisplayID ?? displays.first?.id
+        preferredInputDisplayID = inputDisplayID
+        startApplicationActivationObserver()
+        activateApplicationForBoard()
 
         if presentationMode == .compactIsland, !displays.isEmpty {
             hideMenuBarForCompactBoard()
@@ -51,7 +55,7 @@ final class OverlayWindowController {
             startScreenParametersObserver(model: model)
         } else {
             restoreMenuBarIfCompactBoardIsClosed()
-            focusArrangeWindow(preferredDisplayID: inputDisplayID)
+            restoreArrangeBoardFocus()
         }
     }
 
@@ -71,6 +75,8 @@ final class OverlayWindowController {
     }
 
     func closeArrangeBoard() {
+        stopApplicationActivationObserver()
+        preferredInputDisplayID = nil
         stopScreenParametersObserver()
         let windows = arrangeWindows
         arrangeWindows.removeAll()
@@ -95,11 +101,11 @@ final class OverlayWindowController {
 
     func refocusArrangeBoard(preferredDisplayID: String?) {
         guard !arrangeWindows.isEmpty else { return }
-        activateApplicationForBoard()
-        for window in arrangeWindows {
-            window.orderFrontRegardless()
+        if let preferredDisplayID {
+            preferredInputDisplayID = preferredDisplayID
         }
-        focusArrangeWindow(preferredDisplayID: preferredDisplayID)
+        activateApplicationForBoard()
+        restoreArrangeBoardFocus()
     }
 
     func closeSnapOverlay() {
@@ -107,6 +113,8 @@ final class OverlayWindowController {
     }
 
     func closeAll() {
+        stopApplicationActivationObserver()
+        preferredInputDisplayID = nil
         stopScreenParametersObserver()
         for window in arrangeWindows {
             window.orderOut(nil)
@@ -250,6 +258,9 @@ final class OverlayWindowController {
                 context.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 board.animator().alphaValue = 1
             }
+            if claimsKeyboardFocus {
+                self.restoreArrangeBoardFocus()
+            }
         }
 
         if reduceMotion {
@@ -383,7 +394,8 @@ final class OverlayWindowController {
             panel.invalidateShadow()
         }
         if let focusedDisplayID {
-            focusArrangeWindow(preferredDisplayID: focusedDisplayID)
+            preferredInputDisplayID = focusedDisplayID
+            restoreArrangeBoardFocus()
         }
     }
 
@@ -396,11 +408,54 @@ final class OverlayWindowController {
     }
 
     private func activateApplicationForBoard() {
-        NSRunningApplication.current.activate(options: [])
-        NSApp.activate()
+        NSApp.activate(ignoringOtherApps: true)
     }
 
-    private func focusArrangeWindow(preferredDisplayID: String?) {
+    private func startApplicationActivationObserver() {
+        stopApplicationActivationObserver()
+        applicationDidBecomeActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: NSApp,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.restoreArrangeBoardFocus()
+            }
+        }
+    }
+
+    private func stopApplicationActivationObserver() {
+        if let applicationDidBecomeActiveObserver {
+            NotificationCenter.default.removeObserver(applicationDidBecomeActiveObserver)
+            self.applicationDidBecomeActiveObserver = nil
+        }
+    }
+
+    private func restoreArrangeBoardFocus() {
+        guard !arrangeWindows.isEmpty else { return }
+        for window in arrangeWindows {
+            window.orderFrontRegardless()
+        }
+        guard let preferredWindow = focusArrangeWindow(
+            preferredDisplayID: preferredInputDisplayID
+        ) else {
+            return
+        }
+        DispatchQueue.main.async { [weak self, weak preferredWindow] in
+            guard let self,
+                  let preferredWindow,
+                  NSApp.isActive,
+                  preferredWindow.isVisible,
+                  preferredWindow.isKeyWindow,
+                  self.arrangeWindows.contains(where: { $0 === preferredWindow }) else {
+                return
+            }
+            self.keyboardCaptureView(in: preferredWindow)?.claimKeyboardFocus()
+        }
+    }
+
+    @discardableResult
+    private func focusArrangeWindow(preferredDisplayID: String?) -> NSWindow? {
         let preferredWindow = preferredDisplayID.flatMap { displayID in
             arrangeWindows.first { boardDisplayID(for: $0) == displayID }
         } ?? arrangeWindows.first
@@ -410,6 +465,24 @@ final class OverlayWindowController {
             preferredWindow?.hasShadow = true
             preferredWindow?.invalidateShadow()
         }
+        return preferredWindow
+    }
+
+    private func keyboardCaptureView(in window: NSWindow) -> BoardKeyboardCaptureView? {
+        guard let contentView = window.contentView else { return nil }
+        return firstDescendant(of: BoardKeyboardCaptureView.self, in: contentView)
+    }
+
+    private func firstDescendant<View: NSView>(of type: View.Type, in view: NSView) -> View? {
+        if let match = view as? View {
+            return match
+        }
+        for subview in view.subviews {
+            if let match = firstDescendant(of: type, in: subview) {
+                return match
+            }
+        }
+        return nil
     }
 
     private func boardDisplayID(for window: NSWindow) -> String? {

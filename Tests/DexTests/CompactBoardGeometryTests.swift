@@ -2,6 +2,10 @@ import AppKit
 import XCTest
 @testable import Dex
 
+private final class TestFirstResponderView: NSView {
+    override var acceptsFirstResponder: Bool { true }
+}
+
 final class CompactBoardGeometryTests: XCTestCase {
     @MainActor
     func testBoardKeyboardCaptureClaimsFirstResponderWithoutClick() {
@@ -17,6 +21,61 @@ final class CompactBoardGeometryTests: XCTestCase {
 
         XCTAssertTrue(capture.claimKeyboardFocus())
         XCTAssertTrue(window.firstResponder === capture)
+
+        window.orderOut(nil)
+        window.contentView = nil
+        window.close()
+    }
+
+    @MainActor
+    func testBoardKeyboardCaptureReclaimsFirstResponderWhenWindowBecomesKey() {
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 200, height: 120),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        let container = NSView(frame: window.contentView?.bounds ?? .zero)
+        let capture = BoardKeyboardCaptureView(frame: .zero)
+        let competingResponder = TestFirstResponderView(frame: .zero)
+        container.addSubview(capture)
+        container.addSubview(competingResponder)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+
+        XCTAssertTrue(window.makeFirstResponder(competingResponder))
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+
+        XCTAssertTrue(window.firstResponder === capture)
+
+        window.orderOut(nil)
+        window.contentView = nil
+        window.close()
+    }
+
+    @MainActor
+    func testDetachedBoardKeyboardCaptureStopsReclaimingFirstResponder() {
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 200, height: 120),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        let container = NSView(frame: window.contentView?.bounds ?? .zero)
+        let capture = BoardKeyboardCaptureView(frame: .zero)
+        let competingResponder = TestFirstResponderView(frame: .zero)
+        container.addSubview(capture)
+        container.addSubview(competingResponder)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+
+        capture.removeFromSuperview()
+        XCTAssertTrue(window.makeFirstResponder(competingResponder))
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+
+        XCTAssertTrue(window.firstResponder === competingResponder)
 
         window.orderOut(nil)
         window.contentView = nil
