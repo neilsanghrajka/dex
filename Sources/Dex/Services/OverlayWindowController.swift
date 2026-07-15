@@ -242,8 +242,7 @@ final class OverlayWindowController {
             panel.contentView = board
             panel.hasShadow = true
             panel.invalidateShadow()
-            if claimsKeyboardFocus {
-                panel.makeKeyAndOrderFront(nil)
+            if claimsKeyboardFocus, panel.isKeyWindow {
                 NSMenu.setMenuBarVisible(false)
             }
             NSAnimationContext.runAnimationGroup { context in
@@ -367,6 +366,7 @@ final class OverlayWindowController {
         let displays = NSScreen.screens.map(DisplayInfo.init(screen:))
         let panels = arrangeWindows.compactMap { $0 as? CompactBoardPanel }
         guard !panels.isEmpty else { return }
+        let focusedDisplayID = panels.first(where: \.isKeyWindow)?.displayID
 
         for panel in panels {
             guard !panel.isDismissing else { continue }
@@ -382,7 +382,9 @@ final class OverlayWindowController {
             panel.hasShadow = true
             panel.invalidateShadow()
         }
-        focusArrangeWindow(preferredDisplayID: model.activeBoardDisplayID)
+        if let focusedDisplayID {
+            focusArrangeWindow(preferredDisplayID: focusedDisplayID)
+        }
     }
 
     private func close(windows: inout [NSWindow]) {
@@ -395,6 +397,7 @@ final class OverlayWindowController {
 
     private func activateApplicationForBoard() {
         NSRunningApplication.current.activate(options: [])
+        NSApp.activate()
     }
 
     private func focusArrangeWindow(preferredDisplayID: String?) {
