@@ -72,13 +72,6 @@ private extension EnvironmentValues {
     }
 }
 
-private enum BoardNavigationDirection {
-    case left
-    case right
-    case up
-    case down
-}
-
 private struct BoardNavigationCandidate {
     let selection: BoardSelection
     let center: CGPoint
@@ -452,7 +445,7 @@ struct ArrangeBoardView: View {
             }
             .overlay {
                 if ownsBoardInput && !isPaletteVisible && !isCleanupVisible && !isSaveModeVisible {
-                    BoardKeyboardCapture { event in
+                    BoardKeyboardCapture(hidesMenuBarWhenFocused: presentation.isCompact) { event in
                         handleKeyDown(event)
                     }
                     .frame(width: 1, height: 1)
@@ -1132,13 +1125,13 @@ struct ArrangeBoardView: View {
     private func moveSelection(_ direction: BoardNavigationDirection) {
         ensureSelection()
         let previousSelection = selection
-        guard let target = visualNavigationTarget(direction) else { return }
-        if let role = target.selection.role {
+        guard let targetSelection = visualNavigationTarget(direction)?.selection else { return }
+        if let role = targetSelection.role {
             activeColumnRole = role
         }
-        selection = target.selection
+        selection = targetSelection
         applySelectionSideEffects()
-        if target.selection != previousSelection {
+        if targetSelection != previousSelection {
             model.advanceTour(from: .navigate)
         }
     }
@@ -1151,14 +1144,15 @@ struct ArrangeBoardView: View {
             return candidates.first
         }
 
-        return candidates
-            .filter { candidate in
-                candidate.selection != selection && isCandidate(candidate.center, in: direction, from: origin)
-            }
-            .min { lhs, rhs in
-                visualNavigationScore(lhs.center, direction: direction, from: origin) <
-                    visualNavigationScore(rhs.center, direction: direction, from: origin)
-            }
+        let eligible = candidates.filter { $0.selection != selection }
+        guard let index = BoardNavigationGeometry.targetIndex(
+            from: origin,
+            candidates: eligible.map(\.center),
+            direction: direction
+        ) else {
+            return nil
+        }
+        return eligible[index]
     }
 
     private func visualNavigationCandidates() -> [BoardNavigationCandidate] {
@@ -1402,35 +1396,6 @@ struct ArrangeBoardView: View {
         case .assigned, .unassigned, .runningApplication, .activeMode:
             return nil
         }
-    }
-
-    private func isCandidate(_ point: CGPoint, in direction: BoardNavigationDirection, from origin: CGPoint) -> Bool {
-        let threshold: CGFloat = 8
-        switch direction {
-        case .left:
-            return point.x < origin.x - threshold
-        case .right:
-            return point.x > origin.x + threshold
-        case .up:
-            return point.y < origin.y - threshold
-        case .down:
-            return point.y > origin.y + threshold
-        }
-    }
-
-    private func visualNavigationScore(
-        _ point: CGPoint,
-        direction: BoardNavigationDirection,
-        from origin: CGPoint
-    ) -> CGFloat {
-        // Directional movement should advance to the nearest visual row or column.
-        // Overweighting cross-axis alignment made Right skip an adjacent card and
-        // made Down jump over Open Windows to the lower Running Apps shelf.
-        let axis: BoardNavigationAxis = switch direction {
-        case .left, .right: .horizontal
-        case .up, .down: .vertical
-        }
-        return BoardNavigationGeometry.score(point: point, from: origin, axis: axis)
     }
 
     private func selectFirstWindowOrColumn(in role: ColumnRole) {
@@ -2683,24 +2648,42 @@ private final class NativeCardInteractionSurfaceView: NSView {
 }
 
 private struct BoardKeyboardCapture: NSViewRepresentable {
+    let hidesMenuBarWhenFocused: Bool
     let onKeyDown: (NSEvent) -> Bool
+
+    init(
+        hidesMenuBarWhenFocused: Bool = false,
+        onKeyDown: @escaping (NSEvent) -> Bool
+    ) {
+        self.hidesMenuBarWhenFocused = hidesMenuBarWhenFocused
+        self.onKeyDown = onKeyDown
+    }
 
     func makeNSView(context: Context) -> BoardKeyboardCaptureView {
         let view = BoardKeyboardCaptureView()
+        view.hidesMenuBarWhenFocused = hidesMenuBarWhenFocused
         view.onKeyDown = onKeyDown
         return view
     }
 
     func updateNSView(_ nsView: BoardKeyboardCaptureView, context: Context) {
+        nsView.hidesMenuBarWhenFocused = hidesMenuBarWhenFocused
         nsView.onKeyDown = onKeyDown
-        DispatchQueue.main.async {
-            nsView.window?.makeFirstResponder(nsView)
+        DispatchQueue.main.async { [weak nsView] in
+            guard let nsView,
+                  let window = nsView.window,
+                  window.firstResponder !== nsView else {
+                return
+            }
+            nsView.claimKeyboardFocus()
         }
     }
 }
 
-private final class BoardKeyboardCaptureView: NSView {
+final class BoardKeyboardCaptureView: NSView {
+    var hidesMenuBarWhenFocused = false
     var onKeyDown: ((NSEvent) -> Bool)?
+    private var directionalKeyPressGate = BoardDirectionalKeyPressGate()
 
     override var acceptsFirstResponder: Bool {
         true
@@ -2708,17 +2691,51 @@ private final class BoardKeyboardCaptureView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if window == nil {
+            directionalKeyPressGate.reset()
+            return
+        }
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            window?.makeFirstResponder(self)
+            guard let self,
+                  let window = self.window,
+                  window.firstResponder !== self else {
+                return
+            }
+            self.claimKeyboardFocus()
         }
     }
 
+    @discardableResult
+    func claimKeyboardFocus() -> Bool {
+        guard let window else { return false }
+        let didFocus = window.makeFirstResponder(self)
+        if hidesMenuBarWhenFocused {
+            NSMenu.setMenuBarVisible(false)
+        }
+        return didFocus
+    }
+
     override func keyDown(with event: NSEvent) {
+        guard directionalKeyPressGate.shouldProcessKeyDown(
+            keyCode: event.keyCode,
+            isRepeat: event.isARepeat
+        ) else {
+            return
+        }
         if onKeyDown?(event) == true {
             return
         }
         super.keyDown(with: event)
+    }
+
+    override func keyUp(with event: NSEvent) {
+        directionalKeyPressGate.processKeyUp(keyCode: event.keyCode)
+        super.keyUp(with: event)
+    }
+
+    override func resignFirstResponder() -> Bool {
+        directionalKeyPressGate.reset()
+        return super.resignFirstResponder()
     }
 }
 

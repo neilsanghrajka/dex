@@ -2003,7 +2003,10 @@ final class AppModel: ObservableObject {
     private func refocusArrangeBoardIfNeeded() {
         guard isArrangeBoardVisible else { return }
         DispatchQueue.main.async { [weak self] in
-            self?.overlayController.refocusArrangeBoard()
+            guard let self else { return }
+            self.overlayController.refocusArrangeBoard(
+                preferredDisplayID: self.activeBoardDisplayID
+            )
         }
     }
 

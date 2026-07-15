@@ -227,6 +227,22 @@ final class GridLayoutTests: XCTestCase {
         XCTAssertTrue(BoardKeyboardNavigationPolicy.shouldProcess(keyCode: 36, isRepeat: true))
     }
 
+    func testDirectionalKeyPressGateProcessesOneCommandPerPhysicalPress() {
+        var gate = BoardDirectionalKeyPressGate()
+
+        XCTAssertTrue(gate.shouldProcessKeyDown(keyCode: 124, isRepeat: false))
+        XCTAssertFalse(gate.shouldProcessKeyDown(keyCode: 124, isRepeat: false))
+        XCTAssertFalse(gate.shouldProcessKeyDown(keyCode: 124, isRepeat: true))
+
+        XCTAssertTrue(gate.shouldProcessKeyDown(keyCode: 125, isRepeat: false))
+        gate.processKeyUp(keyCode: 124)
+        XCTAssertTrue(gate.shouldProcessKeyDown(keyCode: 124, isRepeat: false))
+
+        gate.reset()
+        XCTAssertTrue(gate.shouldProcessKeyDown(keyCode: 124, isRepeat: false))
+        XCTAssertTrue(gate.shouldProcessKeyDown(keyCode: 36, isRepeat: true))
+    }
+
     func testStackedHorizontalRoleMovesDoNotMoveVertically() {
         let leftMain = GridLayout(
             visibleFrame: CGRect(x: 0, y: 0, width: 1000, height: 800),

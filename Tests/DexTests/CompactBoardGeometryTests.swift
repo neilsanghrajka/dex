@@ -1,7 +1,51 @@
+import AppKit
 import XCTest
 @testable import Dex
 
 final class CompactBoardGeometryTests: XCTestCase {
+    @MainActor
+    func testBoardKeyboardCaptureClaimsFirstResponderWithoutClick() {
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 200, height: 120),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        let capture = BoardKeyboardCaptureView(frame: .zero)
+        window.contentView = capture
+        window.makeKeyAndOrderFront(nil)
+
+        XCTAssertTrue(capture.claimKeyboardFocus())
+        XCTAssertTrue(window.firstResponder === capture)
+
+        window.orderOut(nil)
+        window.contentView = nil
+        window.close()
+    }
+
+    @MainActor
+    func testBoardKeyboardCaptureDispatchesOneArrowCommandPerPhysicalPress() throws {
+        let capture = BoardKeyboardCaptureView(frame: .zero)
+        var commandCount = 0
+        capture.onKeyDown = { _ in
+            commandCount += 1
+            return true
+        }
+
+        let firstDown = try XCTUnwrap(directionalEvent(type: .keyDown, keyCode: 124))
+        let duplicateInitialDown = try XCTUnwrap(directionalEvent(type: .keyDown, keyCode: 124))
+        let keyUp = try XCTUnwrap(directionalEvent(type: .keyUp, keyCode: 124))
+        let secondPressDown = try XCTUnwrap(directionalEvent(type: .keyDown, keyCode: 124))
+
+        capture.keyDown(with: firstDown)
+        capture.keyDown(with: duplicateInitialDown)
+        XCTAssertEqual(commandCount, 1)
+
+        capture.keyUp(with: keyUp)
+        capture.keyDown(with: secondPressDown)
+        XCTAssertEqual(commandCount, 2)
+    }
+
     func testDirectionalNavigationPrefersAdjacentCardOverFarAlignedCard() {
         let origin = CGPoint(x: 0, y: 0)
         let adjacentCard = CGPoint(x: 220, y: 90)
@@ -22,6 +66,46 @@ final class CompactBoardGeometryTests: XCTestCase {
             BoardNavigationGeometry.score(point: openWindow, from: origin, axis: .vertical),
             BoardNavigationGeometry.score(point: runningApp, from: origin, axis: .vertical)
         )
+    }
+
+    func testDirectionalNavigationDoesNotSkipAdjacentCardInEitherPresentation() {
+        let presentationScales: [(origin: CGPoint, adjacent: CGPoint, farther: CGPoint)] = [
+            // Full-screen board coordinates.
+            (CGPoint(x: 180, y: 160), CGPoint(x: 650, y: 240), CGPoint(x: 1_130, y: 160)),
+            // Compact Island board coordinates.
+            (CGPoint(x: 90, y: 80), CGPoint(x: 325, y: 120), CGPoint(x: 565, y: 80))
+        ]
+
+        for scale in presentationScales {
+            XCTAssertEqual(
+                BoardNavigationGeometry.targetIndex(
+                    from: scale.origin,
+                    candidates: [scale.adjacent, scale.farther],
+                    direction: .right
+                ),
+                0
+            )
+        }
+    }
+
+    func testDirectionalNavigationVisitsOpenWindowsBeforeRunningAppsInEitherPresentation() {
+        let presentationScales: [(origin: CGPoint, openWindows: CGPoint, runningApps: CGPoint)] = [
+            // Full-screen board coordinates.
+            (CGPoint(x: 800, y: 240), CGPoint(x: 850, y: 720), CGPoint(x: 800, y: 940)),
+            // Compact Island board coordinates.
+            (CGPoint(x: 400, y: 120), CGPoint(x: 425, y: 360), CGPoint(x: 400, y: 470))
+        ]
+
+        for scale in presentationScales {
+            XCTAssertEqual(
+                BoardNavigationGeometry.targetIndex(
+                    from: scale.origin,
+                    candidates: [scale.openWindows, scale.runningApps],
+                    direction: .down
+                ),
+                0
+            )
+        }
     }
 
     func testPresentationModeDefaultsToFullScreenAndPersists() {
@@ -112,6 +196,21 @@ final class CompactBoardGeometryTests: XCTestCase {
         XCTAssertLessThanOrEqual(geometry.expandedFrame.width, display.frame.width - 32)
         XCTAssertLessThanOrEqual(geometry.expandedFrame.height, display.frame.height - 32)
         XCTAssertTrue(display.frame.contains(geometry.expandedFrame))
+    }
+
+    private func directionalEvent(type: NSEvent.EventType, keyCode: UInt16) -> NSEvent? {
+        NSEvent.keyEvent(
+            with: type,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: 0,
+            context: nil,
+            characters: "\u{F703}",
+            charactersIgnoringModifiers: "\u{F703}",
+            isARepeat: false,
+            keyCode: keyCode
+        )
     }
 
     func testEveryLayoutRoleFitsCompactViewportAndResolvesFromItsCenter() {

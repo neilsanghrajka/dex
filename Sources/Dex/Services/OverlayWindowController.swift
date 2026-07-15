@@ -16,7 +16,8 @@ final class OverlayWindowController {
         presentationMode: BoardPresentationMode
     ) {
         closeArrangeBoard()
-        NSApp.activate(ignoringOtherApps: true)
+        activateApplicationForBoard()
+        let inputDisplayID = model.activeBoardDisplayID ?? displays.first?.id
 
         if presentationMode == .compactIsland, !displays.isEmpty {
             hideMenuBarForCompactBoard()
@@ -26,7 +27,12 @@ final class OverlayWindowController {
             if presentationMode == .compactIsland {
                 let panel = makeCompactPanel(model: model, display: display)
                 arrangeWindows.append(panel)
-                presentCompactPanel(panel, model: model, display: display)
+                presentCompactPanel(
+                    panel,
+                    model: model,
+                    display: display,
+                    claimsKeyboardFocus: display.id == inputDisplayID
+                )
                 continue
             }
 
@@ -38,7 +44,6 @@ final class OverlayWindowController {
                     .environmentObject(model)
             )
             arrangeWindows.append(window)
-            window.makeKeyAndOrderFront(nil)
             window.orderFrontRegardless()
         }
 
@@ -46,6 +51,7 @@ final class OverlayWindowController {
             startScreenParametersObserver(model: model)
         } else {
             restoreMenuBarIfCompactBoardIsClosed()
+            focusArrangeWindow(preferredDisplayID: inputDisplayID)
         }
     }
 
@@ -87,13 +93,13 @@ final class OverlayWindowController {
         restoreMenuBarIfCompactBoardIsClosed()
     }
 
-    func refocusArrangeBoard() {
+    func refocusArrangeBoard(preferredDisplayID: String?) {
         guard !arrangeWindows.isEmpty else { return }
-        NSApp.activate(ignoringOtherApps: true)
+        activateApplicationForBoard()
         for window in arrangeWindows {
             window.orderFrontRegardless()
         }
-        arrangeWindows.last?.makeKeyAndOrderFront(nil)
+        focusArrangeWindow(preferredDisplayID: preferredDisplayID)
     }
 
     func closeSnapOverlay() {
@@ -125,6 +131,7 @@ final class OverlayWindowController {
             backing: .buffered,
             defer: false
         )
+        window.displayID = display.id
         window.setFrame(display.frame, display: true)
         window.level = level
         window.ignoresMouseEvents = ignoresMouseEvents
@@ -215,10 +222,15 @@ final class OverlayWindowController {
     private func presentCompactPanel(
         _ panel: CompactBoardPanel,
         model: AppModel,
-        display: DisplayInfo
+        display: DisplayInfo,
+        claimsKeyboardFocus: Bool
     ) {
         panel.isDismissing = false
-        panel.makeKeyAndOrderFront(nil)
+        if claimsKeyboardFocus {
+            panel.makeKeyAndOrderFront(nil)
+        } else {
+            panel.orderFrontRegardless()
+        }
         panel.orderFrontRegardless()
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
 
@@ -228,7 +240,12 @@ final class OverlayWindowController {
             let board = self.compactHostingView(model: model, display: display, geometry: panel.geometry)
             board.alphaValue = 0
             panel.contentView = board
-            panel.makeKeyAndOrderFront(nil)
+            panel.hasShadow = true
+            panel.invalidateShadow()
+            if claimsKeyboardFocus {
+                panel.makeKeyAndOrderFront(nil)
+                NSMenu.setMenuBarVisible(false)
+            }
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = reduceMotion ? 0.10 : 0.14
                 context.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -362,8 +379,10 @@ final class OverlayWindowController {
             guard !panel.isOpening else { continue }
             panel.setFrame(geometry.expandedFrame, display: true)
             panel.contentView = compactHostingView(model: model, display: display, geometry: geometry)
+            panel.hasShadow = true
+            panel.invalidateShadow()
         }
-        panels.last?.makeKeyAndOrderFront(nil)
+        focusArrangeWindow(preferredDisplayID: model.activeBoardDisplayID)
     }
 
     private func close(windows: inout [NSWindow]) {
@@ -373,9 +392,34 @@ final class OverlayWindowController {
         }
         windows.removeAll()
     }
+
+    private func activateApplicationForBoard() {
+        NSRunningApplication.current.activate(options: [])
+    }
+
+    private func focusArrangeWindow(preferredDisplayID: String?) {
+        let preferredWindow = preferredDisplayID.flatMap { displayID in
+            arrangeWindows.first { boardDisplayID(for: $0) == displayID }
+        } ?? arrangeWindows.first
+        preferredWindow?.makeKeyAndOrderFront(nil)
+        if preferredWindow is CompactBoardPanel {
+            NSMenu.setMenuBarVisible(false)
+            preferredWindow?.hasShadow = true
+            preferredWindow?.invalidateShadow()
+        }
+    }
+
+    private func boardDisplayID(for window: NSWindow) -> String? {
+        if let window = window as? OverlayWindow {
+            return window.displayID
+        }
+        return (window as? CompactBoardPanel)?.displayID
+    }
 }
 
 private final class OverlayWindow: NSWindow {
+    var displayID = ""
+
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 }
