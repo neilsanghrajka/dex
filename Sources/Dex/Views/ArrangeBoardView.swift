@@ -1006,6 +1006,9 @@ struct ArrangeBoardView: View {
         case "/":
             showPalette()
             return true
+        case "f" where !flags.contains(.shift):
+            maximizeSelectedWindow()
+            return true
         case "m" where !flags.contains(.shift):
             minimizeSelectedWindow()
             return true
@@ -1475,6 +1478,17 @@ struct ArrangeBoardView: View {
             activeColumnRole = role
         }
         selection = nextSelection
+    }
+
+    private func maximizeSelectedWindow() {
+        guard let windowID = selection?.windowID else {
+            model.showMaximizeWindowSelectionHint()
+            return
+        }
+        guard model.maximizeBoardWindow(windowID: windowID, displayID: display.id) else {
+            return
+        }
+        selection = .unassigned(windowID)
     }
 
     private func selectionAfterMinimizing(_ windowID: String) -> BoardSelection? {
@@ -3356,6 +3370,7 @@ private struct BoardPaletteOverlay: View {
                 ShortcutHelpRow(keys: "Arrows", label: "Move selection")
                 ShortcutHelpRow(keys: "Enter", label: "Open selected item")
                 ShortcutHelpRow(keys: "Double-click", label: "Open and promote")
+                ShortcutHelpRow(keys: "F", label: "Maximize selected window")
                 ShortcutHelpRow(keys: "M", label: "Minimize selected window")
                 ShortcutHelpRow(keys: "Q", label: "Close or quit selected")
                 ShortcutHelpRow(keys: "Option + Tab", label: "Switch area")
@@ -4106,7 +4121,7 @@ private struct TourCoachCard: View {
         case .shortcut:
             return "Each key opens (or moves) its app straight into the focused column."
         case .closing:
-            return "/ opens the palette · ⌥S saves this layout as a Group · ⌥1–9 recalls Groups · M minimizes · Q closes things · Esc leaves"
+            return "/ opens the palette · ⌥S saves this layout as a Group · ⌥1–9 recalls Groups · F maximizes · M minimizes · Q closes things · Esc leaves"
         }
     }
 }
@@ -4121,6 +4136,7 @@ private struct BoardLegendBar: View {
             legendItem("/", "Palette")
             legendItem("⌥S", "Save Group")
             legendItem("⌥1–9", "Groups")
+            legendItem("F", "Maximize")
             legendItem("M", "Minimize")
             legendItem("Q", "Close")
             legendItem("Esc", "Leave")

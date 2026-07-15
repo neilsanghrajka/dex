@@ -32,6 +32,10 @@ final class AppShortcutBindingTests: XCTestCase {
     func testRejectsReservedKeys() {
         let bindings = AppShortcutBinding.defaults
         XCTAssertEqual(
+            AppShortcutKeyValidation.validate(pressedCharacter: "f", for: bindings[0].id, in: bindings),
+            .reserved("F")
+        )
+        XCTAssertEqual(
             AppShortcutKeyValidation.validate(pressedCharacter: "q", for: bindings[0].id, in: bindings),
             .reserved("Q")
         )
@@ -136,6 +140,31 @@ final class AppShortcutBindingTests: XCTestCase {
         let persistedData = try XCTUnwrap(defaults.data(forKey: "dex.appShortcutBindings"))
         let persisted = try JSONDecoder().decode([AppShortcutBinding].self, from: persistedData)
         XCTAssertEqual(persisted.map(\.key), ["", "t"])
+    }
+
+    func testStoredFShortcutIsClearedAndPersisted() throws {
+        let suiteName = "DexTests.appShortcutBindings.reservedFMigration"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let store = LayoutStore(defaults: defaults)
+
+        let bindings = [
+            AppShortcutBinding(
+                displayName: "Finder",
+                bundleIdentifiers: ["com.apple.finder"],
+                appNames: ["Finder"],
+                key: "f",
+                preferNewWindow: false
+            )
+        ]
+        store.saveAppShortcutBindings(bindings)
+
+        let loaded = store.loadAppShortcutBindings()
+        XCTAssertEqual(loaded.map(\.key), [""])
+
+        let persistedData = try XCTUnwrap(defaults.data(forKey: "dex.appShortcutBindings"))
+        let persisted = try JSONDecoder().decode([AppShortcutBinding].self, from: persistedData)
+        XCTAssertEqual(persisted.map(\.key), [""])
     }
 
     func testMigratesLegacyMappingsOntoDefaultBindings() throws {

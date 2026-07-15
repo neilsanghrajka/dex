@@ -7,13 +7,16 @@ enum ColumnStackInference {
         windows: [ManagedWindow],
         previousWindows: [ManagedWindow] = [],
         visibleFrame: CGRect,
-        grid: GridLayout
+        grid: GridLayout,
+        allowsInitialInference: Bool = true
     ) -> ColumnStackState {
         guard !windows.isEmpty else { return existing }
 
         let assignedIDs = Set(ColumnRole.allCases.flatMap { existing.windows(in: $0) })
         guard !assignedIDs.isEmpty else {
-            return inferredState(windows: windows, visibleFrame: visibleFrame, grid: grid)
+            return allowsInitialInference
+                ? inferredState(windows: windows, visibleFrame: visibleFrame, grid: grid)
+                : existing
         }
 
         var repaired = remappingStableFingerprints(

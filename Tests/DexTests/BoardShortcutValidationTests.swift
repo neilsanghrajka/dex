@@ -64,6 +64,7 @@ final class BoardShortcutValidationTests: XCTestCase {
     }
 
     func testRejectsReservedBoardKeys() {
+        XCTAssertFalse(BoardShortcutValidation.isValid("f", for: .terminal, in: defaultMappings(updating: .terminal, to: "f")))
         XCTAssertFalse(BoardShortcutValidation.isValid("q", for: .terminal, in: defaultMappings(updating: .terminal, to: "q")))
         XCTAssertFalse(BoardShortcutValidation.isValid("m", for: .terminal, in: defaultMappings(updating: .terminal, to: "m")))
         XCTAssertTrue(BoardShortcutValidation.isValid("x", for: .codex, in: defaultMappings(updating: .codex, to: "x")))

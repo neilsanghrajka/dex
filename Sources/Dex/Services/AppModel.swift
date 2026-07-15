@@ -646,6 +646,37 @@ final class AppModel: ObservableObject {
         refocusArrangeBoardIfNeeded()
     }
 
+    @discardableResult
+    func maximizeBoardWindow(windowID: String, displayID: String) -> Bool {
+        guard let window = windows.first(where: { $0.id == windowID }) else {
+            showHUD("Window not found")
+            return false
+        }
+        guard let display = allDisplays().first(where: { $0.id == displayID }) else {
+            showHUD("Display not found")
+            refocusArrangeBoardIfNeeded()
+            return false
+        }
+        let maximizedFrame = MaximizedWindowGeometry.frame(visibleFrame: display.visibleFrame)
+        guard accessibility.moveResize(window, to: maximizedFrame) else {
+            showHUD("Could not maximize \(window.displayTitle)")
+            refocusArrangeBoardIfNeeded()
+            return false
+        }
+
+        removeWindowFromActiveWorkspaceStacks(windowID)
+        saveWorkspaceStacks()
+        showHUD("Maximized \(window.displayTitle)")
+        refocusArrangeBoardIfNeeded()
+        refreshThumbnailsAfterWindowGeometryChange()
+        return true
+    }
+
+    func showMaximizeWindowSelectionHint() {
+        showHUD("Select a window to maximize")
+        refocusArrangeBoardIfNeeded()
+    }
+
     func cleanupCandidates(on display: DisplayInfo) -> [CleanupCandidate] {
         windows(on: display).compactMap { window in
             let haystack = "\(window.appName) \(window.bundleIdentifier) \(window.title)".lowercased()
@@ -1949,7 +1980,9 @@ final class AppModel: ObservableObject {
                 windows: windows(on: display),
                 previousWindows: previousWindows.filter { displayID(for: $0) == display.id },
                 visibleFrame: display.visibleFrame,
-                grid: grid(for: display)
+                grid: grid(for: display),
+                allowsInitialInference: stacksByWorkspace[workspaceKey(for: display.id)] == nil &&
+                    stacksByDisplay[display.id] == nil
             )
             guard repaired != existing else {
                 continue
@@ -2120,9 +2153,15 @@ final class AppModel: ObservableObject {
 
     private func removeWindowFromActiveWorkspaceStacks(_ windowID: String) {
         for display in allDisplays() {
-            var state = stackState(for: display.id)
-            state.remove(windowID)
-            setStackState(state, for: display.id, save: false)
+            let activeWorkspaceKey = workspaceKey(for: display.id)
+            if stacksByWorkspace[activeWorkspaceKey] == nil {
+                stacksByWorkspace[activeWorkspaceKey] = stackState(for: display.id)
+            }
+            stacksByWorkspace = WorkspaceStackMutation.removingWindow(
+                windowID,
+                fromWorkspace: activeWorkspaceKey,
+                in: stacksByWorkspace
+            )
         }
     }
 

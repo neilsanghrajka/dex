@@ -4,6 +4,21 @@ import XCTest
 @testable import Dex
 
 final class ColumnStackInferenceTests: XCTestCase {
+    func testExplicitlyEmptyWorkspaceDoesNotReinferUnassignedWindows() {
+        let window = makeWindow(id: "expanded", frame: CGRect(x: 0, y: 0, width: 1200, height: 700))
+        let visibleFrame = CGRect(x: 0, y: 0, width: 1200, height: 800)
+
+        let repaired = ColumnStackInference.repairedState(
+            existing: ColumnStackState(),
+            windows: [window],
+            visibleFrame: visibleFrame,
+            grid: GridLayout(visibleFrame: visibleFrame),
+            allowsInitialInference: false
+        )
+
+        XCTAssertTrue(repaired.windowIDsByColumn.values.allSatisfy(\.isEmpty))
+    }
+
     func testInfersColumnsFromWindowPositionsWhenNoLiveAssignmentsExist() {
         let grid = GridLayout(visibleFrame: CGRect(x: 0, y: 0, width: 1000, height: 800), gutter: 10)
         let left = makeWindow(id: "left", frame: CGRect(x: 20, y: 100, width: 180, height: 500))

@@ -154,7 +154,9 @@ final class LayoutStore {
            let decoded = try? JSONDecoder().decode([AppShortcutBinding].self, from: data) {
             let migrated = decoded.map { binding in
                 var binding = binding
-                if BoardShortcutValidation.clean(binding.key) == "m" {
+                if AppShortcutKeyValidation.reservedKeys.contains(
+                    BoardShortcutValidation.clean(binding.key)
+                ) {
                     binding.key = ""
                 }
                 return binding

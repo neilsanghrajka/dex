@@ -43,7 +43,7 @@ struct AppShortcutSettingsView: View {
         } header: {
             Text("Launch Keys")
         } footer: {
-            Text("Press a key while the board is open to launch that app in the focused column. Click a key badge and press a new letter or number to rebind. Reserved keys stay fixed: M minimizes a window, Q closes or quits, and / opens search.")
+            Text("Press a key while the board is open to launch that app in the focused column. Click a key badge and press a new letter or number to rebind. Reserved keys stay fixed: F maximizes a window, M minimizes, Q closes or quits, and / opens search.")
         }
     }
 
