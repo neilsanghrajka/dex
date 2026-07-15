@@ -74,7 +74,7 @@ private extension EnvironmentValues {
 
 private struct BoardNavigationCandidate {
     let selection: BoardSelection
-    let center: CGPoint
+    let frame: CGRect
 }
 
 private enum BoardNavigationCoordinateSpace {
@@ -1153,7 +1153,7 @@ struct ArrangeBoardView: View {
         let eligible = candidates.filter { $0.selection != selection }
         guard let index = BoardNavigationGeometry.targetIndex(
             from: origin,
-            candidates: eligible.map(\.center),
+            candidates: eligible.map(\.frame),
             direction: direction
         ) else {
             return nil
@@ -1199,20 +1199,22 @@ struct ArrangeBoardView: View {
             }
             return BoardNavigationCandidate(
                 selection: candidate.selection,
-                center: CGPoint(x: frame.midX, y: frame.midY)
+                frame: frame
             )
         }
     }
 
     private func navigationCandidatesForAssignedWindows(role: ColumnRole, zoneRect: CGRect) -> [BoardNavigationCandidate] {
         let windows = windows(for: role)
-        guard !windows.isEmpty else { return [] }
+        guard !windows.isEmpty else {
+            return [BoardNavigationCandidate(selection: .column(role), frame: zoneRect)]
+        }
 
         let metrics = assignedGridMetrics(for: zoneRect.width)
         return windows.enumerated().map { index, window in
             BoardNavigationCandidate(
                 selection: .assigned(role, window.id),
-                center: cardCenter(
+                frame: cardFrame(
                     index: index,
                     columns: metrics.columns,
                     cardWidth: metrics.cardWidth,
@@ -1232,7 +1234,9 @@ struct ArrangeBoardView: View {
 
     private func navigationCandidatesForUnassignedWindows(zoneRect: CGRect) -> [BoardNavigationCandidate] {
         let windows = model.unassignedWindows(on: display)
-        guard !windows.isEmpty else { return [] }
+        guard !windows.isEmpty else {
+            return [BoardNavigationCandidate(selection: .unassignedArea, frame: zoneRect)]
+        }
 
         let availableCardHeight = max(
             layoutProfile.unassignedMinimumCardHeight,
@@ -1255,9 +1259,11 @@ struct ArrangeBoardView: View {
         return windows.enumerated().map { index, window in
             BoardNavigationCandidate(
                 selection: .unassigned(window.id),
-                center: CGPoint(
-                    x: origin.x + CGFloat(index) * (cardWidth + spacing) + cardWidth / 2,
-                    y: origin.y + cardHeight / 2
+                frame: CGRect(
+                    x: origin.x + CGFloat(index) * (cardWidth + spacing),
+                    y: origin.y,
+                    width: cardWidth,
+                    height: cardHeight
                 )
             )
         }
@@ -1265,7 +1271,9 @@ struct ArrangeBoardView: View {
 
     private func navigationCandidatesForRunningApps(zoneRect: CGRect) -> [BoardNavigationCandidate] {
         let apps = runningApps
-        guard !apps.isEmpty else { return [] }
+        guard !apps.isEmpty else {
+            return [BoardNavigationCandidate(selection: .runningAppsArea, frame: zoneRect)]
+        }
 
         let cardWidth = layoutProfile.runningCardWidth
         let spacing = layoutProfile.runningCardSpacing
@@ -1280,9 +1288,11 @@ struct ArrangeBoardView: View {
         return apps.enumerated().map { index, item in
             BoardNavigationCandidate(
                 selection: .runningApplication(item.id),
-                center: CGPoint(
-                    x: origin.x + CGFloat(index) * (cardWidth + spacing) + cardWidth / 2,
-                    y: origin.y + 28
+                frame: CGRect(
+                    x: origin.x + CGFloat(index) * (cardWidth + spacing),
+                    y: origin.y,
+                    width: cardWidth,
+                    height: 56
                 )
             )
         }
@@ -1305,9 +1315,11 @@ struct ArrangeBoardView: View {
         return modes.enumerated().map { index, item in
             BoardNavigationCandidate(
                 selection: .activeMode(item.id),
-                center: CGPoint(
-                    x: origin.x + CGFloat(index) * (cardWidth + spacing) + cardWidth / 2,
-                    y: origin.y + 30
+                frame: CGRect(
+                    x: origin.x + CGFloat(index) * (cardWidth + spacing),
+                    y: origin.y,
+                    width: cardWidth,
+                    height: 60
                 )
             )
         }
@@ -1326,29 +1338,31 @@ struct ArrangeBoardView: View {
         return (columns, cardWidth, cardHeight)
     }
 
-    private func cardCenter(
+    private func cardFrame(
         index: Int,
         columns: Int,
         cardWidth: CGFloat,
         cardHeight: CGFloat,
         origin: CGPoint,
         spacing: CGSize
-    ) -> CGPoint {
+    ) -> CGRect {
         let column = index % columns
         let row = index / columns
-        return CGPoint(
-            x: origin.x + CGFloat(column) * (cardWidth + spacing.width) + cardWidth / 2,
-            y: origin.y + CGFloat(row) * (cardHeight + spacing.height) + cardHeight / 2
+        return CGRect(
+            x: origin.x + CGFloat(column) * (cardWidth + spacing.width),
+            y: origin.y + CGFloat(row) * (cardHeight + spacing.height),
+            width: cardWidth,
+            height: cardHeight
         )
     }
 
-    private func navigationOrigin(in candidates: [BoardNavigationCandidate]) -> CGPoint? {
+    private func navigationOrigin(in candidates: [BoardNavigationCandidate]) -> CGRect? {
         guard let selection else { return nil }
         if let selected = candidates.first(where: { $0.selection == selection }) {
-            return selected.center
+            return selected.frame
         }
         if let frame = navigationFrames[selection], frame.width > 1, frame.height > 1 {
-            return CGPoint(x: frame.midX, y: frame.midY)
+            return frame
         }
 
         switch selection {
@@ -1362,10 +1376,7 @@ struct ArrangeBoardView: View {
                 metrics: metrics,
                 grid: grid
             )
-            return CGPoint(
-                x: rect.midX,
-                y: rect.midY
-            )
+            return rect
         case .unassignedArea:
             let visibleLocalRect = boardViewportRect
             let shelfRects = bottomShelfRects(
@@ -1373,10 +1384,7 @@ struct ArrangeBoardView: View {
                 grid: model.grid(for: display),
                 unassignedCount: model.unassignedWindows(on: display).count
             )
-            return CGPoint(
-                x: shelfRects.openWindows.midX,
-                y: shelfRects.openWindows.midY
-            )
+            return shelfRects.openWindows
         case .runningAppsArea:
             let visibleLocalRect = boardViewportRect
             let shelfRects = bottomShelfRects(
@@ -1384,10 +1392,7 @@ struct ArrangeBoardView: View {
                 grid: model.grid(for: display),
                 unassignedCount: model.unassignedWindows(on: display).count
             )
-            return CGPoint(
-                x: shelfRects.runningApps.midX,
-                y: shelfRects.runningApps.midY
-            )
+            return shelfRects.runningApps
         case .activeModesArea:
             let visibleLocalRect = boardViewportRect
             let shelfRects = bottomShelfRects(
@@ -1396,9 +1401,9 @@ struct ArrangeBoardView: View {
                 unassignedCount: model.unassignedWindows(on: display).count
             )
             guard let activeModesRect = shelfRects.activeModes else {
-                return CGPoint(x: shelfRects.runningApps.midX, y: shelfRects.runningApps.midY)
+                return shelfRects.runningApps
             }
-            return CGPoint(x: activeModesRect.midX, y: activeModesRect.midY)
+            return activeModesRect
         case .assigned, .unassigned, .runningApplication, .activeMode:
             return nil
         }
@@ -1527,17 +1532,17 @@ struct ArrangeBoardView: View {
 
     private func nearestRemainingSelection(excludingWindowID windowID: String) -> BoardSelection? {
         let candidates = visualNavigationCandidates()
-        guard let origin = candidates.first(where: { $0.selection == selection })?.center else {
+        guard let origin = candidates.first(where: { $0.selection == selection })?.frame else {
             return candidates.first(where: { $0.selection.windowID != windowID })?.selection
         }
 
         return candidates
             .filter { $0.selection.windowID != windowID }
             .min { lhs, rhs in
-                let lhsDX = lhs.center.x - origin.x
-                let lhsDY = lhs.center.y - origin.y
-                let rhsDX = rhs.center.x - origin.x
-                let rhsDY = rhs.center.y - origin.y
+                let lhsDX = lhs.frame.midX - origin.midX
+                let lhsDY = lhs.frame.midY - origin.midY
+                let rhsDX = rhs.frame.midX - origin.midX
+                let rhsDY = rhs.frame.midY - origin.midY
                 let lhsDistance = lhsDX * lhsDX + lhsDY * lhsDY
                 let rhsDistance = rhsDX * rhsDX + rhsDY * rhsDY
                 return lhsDistance < rhsDistance

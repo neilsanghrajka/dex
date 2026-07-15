@@ -46,34 +46,20 @@ final class CompactBoardGeometryTests: XCTestCase {
         XCTAssertEqual(commandCount, 2)
     }
 
-    func testDirectionalNavigationPrefersAdjacentCardOverFarAlignedCard() {
-        let origin = CGPoint(x: 0, y: 0)
-        let adjacentCard = CGPoint(x: 220, y: 90)
-        let fartherAlignedCard = CGPoint(x: 400, y: 0)
-
-        XCTAssertLessThan(
-            BoardNavigationGeometry.score(point: adjacentCard, from: origin, axis: .horizontal),
-            BoardNavigationGeometry.score(point: fartherAlignedCard, from: origin, axis: .horizontal)
-        )
-    }
-
-    func testDirectionalNavigationPrefersOpenWindowsRowOverRunningAppsRow() {
-        let origin = CGPoint(x: 0, y: 0)
-        let openWindow = CGPoint(x: 200, y: 100)
-        let runningApp = CGPoint(x: 0, y: 240)
-
-        XCTAssertLessThan(
-            BoardNavigationGeometry.score(point: openWindow, from: origin, axis: .vertical),
-            BoardNavigationGeometry.score(point: runningApp, from: origin, axis: .vertical)
-        )
-    }
-
     func testDirectionalNavigationDoesNotSkipAdjacentCardInEitherPresentation() {
-        let presentationScales: [(origin: CGPoint, adjacent: CGPoint, farther: CGPoint)] = [
+        let presentationScales: [(origin: CGRect, adjacent: CGRect, farther: CGRect)] = [
             // Full-screen board coordinates.
-            (CGPoint(x: 180, y: 160), CGPoint(x: 650, y: 240), CGPoint(x: 1_130, y: 160)),
+            (
+                CGRect(x: 80, y: 90, width: 200, height: 140),
+                CGRect(x: 550, y: 170, width: 200, height: 140),
+                CGRect(x: 1_030, y: 90, width: 200, height: 140)
+            ),
             // Compact Island board coordinates.
-            (CGPoint(x: 90, y: 80), CGPoint(x: 325, y: 120), CGPoint(x: 565, y: 80))
+            (
+                CGRect(x: 45, y: 45, width: 90, height: 70),
+                CGRect(x: 280, y: 85, width: 90, height: 70),
+                CGRect(x: 520, y: 45, width: 90, height: 70)
+            )
         ]
 
         for scale in presentationScales {
@@ -89,11 +75,19 @@ final class CompactBoardGeometryTests: XCTestCase {
     }
 
     func testDirectionalNavigationVisitsOpenWindowsBeforeRunningAppsInEitherPresentation() {
-        let presentationScales: [(origin: CGPoint, openWindows: CGPoint, runningApps: CGPoint)] = [
+        let presentationScales: [(origin: CGRect, openWindows: CGRect, runningApps: CGRect)] = [
             // Full-screen board coordinates.
-            (CGPoint(x: 800, y: 240), CGPoint(x: 850, y: 720), CGPoint(x: 800, y: 940)),
+            (
+                CGRect(x: 700, y: 170, width: 200, height: 140),
+                CGRect(x: 750, y: 650, width: 200, height: 140),
+                CGRect(x: 700, y: 900, width: 200, height: 80)
+            ),
             // Compact Island board coordinates.
-            (CGPoint(x: 400, y: 120), CGPoint(x: 425, y: 360), CGPoint(x: 400, y: 470))
+            (
+                CGRect(x: 350, y: 80, width: 100, height: 80),
+                CGRect(x: 375, y: 320, width: 100, height: 80),
+                CGRect(x: 350, y: 440, width: 100, height: 56)
+            )
         ]
 
         for scale in presentationScales {
@@ -105,6 +99,126 @@ final class CompactBoardGeometryTests: XCTestCase {
                 ),
                 0
             )
+        }
+    }
+
+    func testRightPrefersAlignedPaneOverOpenWindowsBelow() {
+        let origin = CGRect(x: 500, y: 100, width: 180, height: 130)
+        let rightPane = CGRect(x: 900, y: 100, width: 180, height: 130)
+        let openWindow = CGRect(x: 690, y: 500, width: 180, height: 130)
+
+        XCTAssertEqual(
+            BoardNavigationGeometry.targetIndex(
+                from: origin,
+                candidates: [openWindow, rightPane],
+                direction: .right
+            ),
+            1
+        )
+    }
+
+    func testDownPrefersOpenWindowsOverSlightlyLowerSidePane() {
+        let origin = CGRect(x: 500, y: 100, width: 180, height: 130)
+        let sidePane = CGRect(x: 900, y: 120, width: 180, height: 130)
+        let openWindow = CGRect(x: 520, y: 500, width: 180, height: 130)
+
+        XCTAssertEqual(
+            BoardNavigationGeometry.targetIndex(
+                from: origin,
+                candidates: [sidePane, openWindow],
+                direction: .down
+            ),
+            1
+        )
+    }
+
+    func testTwoByTwoNavigationFollowsRowsAndColumns() {
+        let topLeft = CGRect(x: 0, y: 0, width: 180, height: 120)
+        let topRight = CGRect(x: 220, y: 0, width: 180, height: 120)
+        let bottomLeft = CGRect(x: 0, y: 160, width: 180, height: 120)
+        let bottomRight = CGRect(x: 220, y: 160, width: 180, height: 120)
+        let candidates = [topRight, bottomLeft, bottomRight]
+
+        XCTAssertEqual(
+            BoardNavigationGeometry.targetIndex(from: topLeft, candidates: candidates, direction: .right),
+            0
+        )
+        XCTAssertEqual(
+            BoardNavigationGeometry.targetIndex(from: topLeft, candidates: candidates, direction: .down),
+            1
+        )
+    }
+
+    func testDirectionalNavigationFollowsEveryGridLayoutAtFullAndCompactScales() throws {
+        let sizes = [
+            CGSize(width: 1_920, height: 1_000),
+            CGSize(width: 760, height: 420)
+        ]
+
+        for size in sizes {
+            for kind in BoardLayoutKind.allCases {
+                let grid = GridLayout(
+                    visibleFrame: CGRect(origin: .zero, size: size),
+                    gutter: 10,
+                    kind: kind
+                )
+
+                switch kind {
+                case .threeColumn, .wideCenter:
+                    try assertNavigation(
+                        in: grid,
+                        from: .center,
+                        direction: .right,
+                        reaches: .right
+                    )
+                case .halves, .leftNarrowCenter, .centerRightNarrow:
+                    try assertNavigation(
+                        in: grid,
+                        from: .left,
+                        direction: .right,
+                        reaches: .right
+                    )
+                case .twoByTwo:
+                    try assertNavigation(
+                        in: grid,
+                        from: .topLeft,
+                        direction: .right,
+                        reaches: .topRight
+                    )
+                    try assertNavigation(
+                        in: grid,
+                        from: .topLeft,
+                        direction: .down,
+                        reaches: .bottomLeft
+                    )
+                case .leftMainRightStack:
+                    try assertNavigation(
+                        in: grid,
+                        from: .left,
+                        direction: .right,
+                        reaches: .topRight
+                    )
+                    try assertNavigation(
+                        in: grid,
+                        from: .topRight,
+                        direction: .down,
+                        reaches: .bottomRight
+                    )
+                case .leftStackRightMain:
+                    try assertNavigation(
+                        in: grid,
+                        from: .topLeft,
+                        direction: .right,
+                        reaches: .right
+                    )
+                    try assertNavigation(
+                        in: grid,
+                        from: .topLeft,
+                        direction: .down,
+                        reaches: .bottomLeft
+                    )
+                }
+            }
         }
     }
 
@@ -210,6 +324,46 @@ final class CompactBoardGeometryTests: XCTestCase {
             charactersIgnoringModifiers: "\u{F703}",
             isARepeat: false,
             keyCode: keyCode
+        )
+    }
+
+    private func assertNavigation(
+        in grid: GridLayout,
+        from originRole: ColumnRole,
+        direction: BoardNavigationDirection,
+        reaches expectedRole: ColumnRole,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let candidateRoles = grid.roles.filter { $0 != originRole }
+        let candidateFrames = candidateRoles.map { navigationCardFrame(for: $0, in: grid) }
+        let targetIndex = try XCTUnwrap(
+            BoardNavigationGeometry.targetIndex(
+                from: navigationCardFrame(for: originRole, in: grid),
+                candidates: candidateFrames,
+                direction: direction
+            ),
+            file: file,
+            line: line
+        )
+        XCTAssertEqual(candidateRoles[targetIndex], expectedRole, file: file, line: line)
+    }
+
+    private func navigationCardFrame(for role: ColumnRole, in grid: GridLayout) -> CGRect {
+        let roleRect = grid.rect(for: role)
+        let localRoleRect = CGRect(
+            x: roleRect.minX - grid.visibleFrame.minX,
+            y: grid.visibleFrame.maxY - roleRect.maxY,
+            width: roleRect.width,
+            height: roleRect.height
+        )
+        let horizontalInset = min(20, localRoleRect.width * 0.08)
+        let verticalInset = min(20, localRoleRect.height * 0.08)
+        return CGRect(
+            x: localRoleRect.minX + horizontalInset,
+            y: localRoleRect.minY + verticalInset,
+            width: min(180, max(20, localRoleRect.width - horizontalInset * 2)),
+            height: min(120, max(20, localRoleRect.height - verticalInset * 2))
         )
     }
 
